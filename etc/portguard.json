@@ -1,0 +1,3 @@
+{
+  "note": "Stage6 no longer uses this file. Settings are loaded only from /data/adb/modules/PortGuard/settings/"
+}

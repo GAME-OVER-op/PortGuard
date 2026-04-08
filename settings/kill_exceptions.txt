@@ -1,0 +1,2 @@
+# Пакеты, которые нельзя force-stop даже если включен reaction_mode=force_stop
+# com.google.android.youtube
