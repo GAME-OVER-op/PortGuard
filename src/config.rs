@@ -20,6 +20,9 @@ pub struct Config {
     pub active_protection: String,
     pub protect_loopback_only: bool,
     pub tcp4_enabled: bool,
+    pub udp4_enabled: bool,
+    pub tcp6_enabled: bool,
+    pub udp6_enabled: bool,
     pub resolve_process_details: bool,
     pub trusted_client_packages: Vec<String>,
     pub trusted_client_uids: Vec<u32>,
@@ -33,9 +36,13 @@ pub struct Config {
     pub warn_cooldown_secs: u64,
     pub reaction_cooldown_secs: u64,
     pub max_rules: usize,
+    pub active_self_test_enabled: bool,
+    pub self_test_timeout_ms: u64,
     pub auto_discover_packages: bool,
+    pub user_apps_only: bool,
     pub package_uid_sources: Vec<String>,
     pub package_refresh_secs: u64,
+    pub network_refresh_secs: u64,
     pub summary_port_limit: usize,
     pub counter_refresh_loops: u64,
     pub learning_mode: bool,
@@ -52,6 +59,9 @@ impl Default for Config {
             active_protection: "on".to_string(),
             protect_loopback_only: false,
             tcp4_enabled: true,
+            udp4_enabled: true,
+            tcp6_enabled: true,
+            udp6_enabled: true,
             resolve_process_details: false,
             trusted_client_packages: vec!["com.example.portguardui".to_string()],
             trusted_client_uids: Vec::new(),
@@ -65,9 +75,13 @@ impl Default for Config {
             warn_cooldown_secs: 15,
             reaction_cooldown_secs: 60,
             max_rules: 100_000,
+            active_self_test_enabled: true,
+            self_test_timeout_ms: 1500,
             auto_discover_packages: true,
+            user_apps_only: true,
             package_uid_sources: vec!["/data/system/packages.list".to_string()],
             package_refresh_secs: 60,
+            network_refresh_secs: 10,
             summary_port_limit: 24,
             counter_refresh_loops: 2,
             learning_mode: false,
@@ -81,15 +95,20 @@ impl Config {
         self.reload_check_secs = self.reload_check_secs.max(30);
         self.loop_interval_ms = self.loop_interval_ms.max(500);
         self.package_refresh_secs = self.package_refresh_secs.max(10);
+        self.network_refresh_secs = self.network_refresh_secs.max(2);
         self.summary_port_limit = self.summary_port_limit.max(1);
         self.counter_refresh_loops = self.counter_refresh_loops.max(1);
         self.scan_window_secs = self.scan_window_secs.max(1);
         self.warn_cooldown_secs = self.warn_cooldown_secs.max(1);
         self.reaction_cooldown_secs = self.reaction_cooldown_secs.max(5);
+        self.self_test_timeout_ms = self.self_test_timeout_ms.max(250);
         self.reaction_mode = self.reaction_mode.trim().to_ascii_lowercase();
         self.active_protection = self.active_protection.trim().to_ascii_lowercase();
         if self.active_protection != "off" {
             self.active_protection = "on".to_string();
+        }
+        if !self.tcp4_enabled && !self.udp4_enabled && !self.tcp6_enabled && !self.udp6_enabled {
+            self.tcp4_enabled = true;
         }
         dedup_sort_strings(&mut self.trusted_client_packages);
         dedup_sort_u32(&mut self.trusted_client_uids);

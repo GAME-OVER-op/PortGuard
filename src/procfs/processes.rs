@@ -3,7 +3,6 @@ use anyhow::Result;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    path::Path,
 };
 
 fn read_cmdline(pid: i32) -> String {

@@ -1,9 +1,9 @@
 use crate::{
     config::Config,
-    types::{DesiredRule, Listener, PackageIndex},
+    types::{DesiredRule, Listener, PackageIndex, Proto},
 };
 use anyhow::{bail, Result};
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, net::IpAddr, str::FromStr};
 
 #[derive(Debug, Clone)]
 pub struct PolicyDecision {
@@ -13,8 +13,32 @@ pub struct PolicyDecision {
     pub rules: Vec<DesiredRule>,
 }
 
-fn is_loopback_ip(ip: &str) -> bool {
-    ip == "127.0.0.1" || ip.starts_with("127.")
+fn is_loopback_reachable_bind(proto: Proto, ip: &str) -> bool {
+    match IpAddr::from_str(ip) {
+        Ok(addr) => {
+            if addr.is_loopback() || addr.is_unspecified() {
+                return true;
+            }
+            match (proto, addr) {
+                (Proto::Tcp6 | Proto::Udp6, IpAddr::V6(v6)) => v6
+                    .to_ipv4_mapped()
+                    .map(|v4| v4.is_loopback() || v4.is_unspecified())
+                    .unwrap_or(false),
+                _ => false,
+            }
+        }
+        Err(_) => match proto {
+            Proto::Tcp4 | Proto::Udp4 => {
+                ip == "0.0.0.0" || ip == "127.0.0.1" || ip.starts_with("127.")
+            }
+            Proto::Tcp6 | Proto::Udp6 => {
+                ip == "::"
+                    || ip == "::1"
+                    || ip == "0:0:0:0:0:0:0:0"
+                    || ip == "0:0:0:0:0:0:0:1"
+            }
+        },
+    }
 }
 
 fn any_owner_package_in(list: &[String], listener: &Listener) -> bool {
@@ -34,7 +58,9 @@ pub fn build(cfg: &Config, listeners: &[Listener], packages: &PackageIndex) -> R
     let protected_listeners: Vec<Listener> = listeners
         .iter()
         .filter(|listener| {
-            (!cfg.protect_loopback_only || is_loopback_ip(&listener.local_ip))
+            packages.is_known_regular_app_uid(listener.uid)
+                && (!cfg.protect_loopback_only
+                    || is_loopback_reachable_bind(listener.proto, &listener.local_ip))
                 && !any_owner_package_in(&cfg.ignored_owner_packages, listener)
         })
         .cloned()
@@ -51,6 +77,7 @@ pub fn build(cfg: &Config, listeners: &[Listener], packages: &PackageIndex) -> R
                 continue;
             }
             rules_set.insert(DesiredRule {
+                proto: listener.proto,
                 blocked_uid: *uid,
                 dst_port: listener.port,
                 owner_uid: listener.uid,

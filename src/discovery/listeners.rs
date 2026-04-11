@@ -1,7 +1,7 @@
 use crate::{
     config::Config,
     procfs::{processes, sockets},
-    types::{Listener, PackageIndex, Proto},
+    types::{Listener, PackageIndex},
 };
 use anyhow::Result;
 use std::collections::BTreeSet;
@@ -12,6 +12,15 @@ pub fn discover(cfg: &Config, packages: &PackageIndex) -> Result<Vec<Listener>> 
 
     if cfg.tcp4_enabled {
         sock_entries.extend(sockets::read_tcp4_listeners()?);
+    }
+    if cfg.udp4_enabled {
+        sock_entries.extend(sockets::read_udp4_sockets()?);
+    }
+    if cfg.tcp6_enabled {
+        sock_entries.extend(sockets::read_tcp6_listeners()?);
+    }
+    if cfg.udp6_enabled {
+        sock_entries.extend(sockets::read_udp6_sockets()?);
     }
 
     let process_map = if cfg.resolve_process_details {
@@ -30,7 +39,7 @@ pub fn discover(cfg: &Config, packages: &PackageIndex) -> Result<Vec<Listener>> 
             .unwrap_or_default();
 
         out.push(Listener {
-            proto: Proto::Tcp4,
+            proto: entry.proto,
             local_ip: entry.local_ip,
             port: entry.port,
             uid: entry.uid,
@@ -41,6 +50,6 @@ pub fn discover(cfg: &Config, packages: &PackageIndex) -> Result<Vec<Listener>> 
         });
     }
 
-    out.sort_by_key(|v| (v.port, v.uid, v.pid.unwrap_or(-1), v.inode));
+    out.sort_by_key(|v| (v.proto, v.port, v.uid, v.pid.unwrap_or(-1), v.inode));
     Ok(out)
 }

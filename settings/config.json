@@ -6,6 +6,9 @@
   "active_protection": "on",
   "protect_loopback_only": false,
   "tcp4_enabled": true,
+  "udp4_enabled": true,
+  "tcp6_enabled": true,
+  "udp6_enabled": true,
   "resolve_process_details": false,
   "trusted_client_packages": [
     "com.example.portguardui"
@@ -22,6 +25,7 @@
   "reaction_cooldown_secs": 60,
   "max_rules": 100000,
   "auto_discover_packages": true,
+  "user_apps_only": true,
   "package_uid_sources": [
     "/data/system/packages.list"
   ],
@@ -29,5 +33,8 @@
   "summary_port_limit": 24,
   "counter_refresh_loops": 2,
   "learning_mode": false,
-  "reaction_mode": "off"
+  "reaction_mode": "off",
+  "active_self_test_enabled": true,
+  "self_test_timeout_ms": 1500,
+  "network_refresh_secs": 10
 }

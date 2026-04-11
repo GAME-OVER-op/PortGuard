@@ -1,4 +1,6 @@
-use crate::types::{AppliedRule, DesiredRule, Listener};
+use crate::types::{
+    AppliedRule, DesiredRule, FirewallProtoCapability, FirewallSelfTestResult, Listener, LocalAddressSnapshot, Proto,
+};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fs, path::Path};
@@ -11,7 +13,16 @@ pub struct RuntimeState {
     pub trusted_client_uids: Vec<u32>,
     pub applied_rules: Vec<AppliedRule>,
     pub backend: String,
+    pub firewall_capabilities: Vec<FirewallProtoCapability>,
+    #[serde(default)]
+    pub firewall_self_tests: Vec<FirewallSelfTestResult>,
+    #[serde(default)]
+    pub local_address_snapshots: Vec<LocalAddressSnapshot>,
     pub last_apply_epoch_secs: u64,
+    #[serde(default)]
+    pub last_self_test_epoch_secs: u64,
+    #[serde(default)]
+    pub last_network_check_epoch_secs: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -20,20 +31,34 @@ pub struct CounterSnapshot {
     pub bytes: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AttemptEvent {
     pub ts: u64,
+    pub proto: Proto,
     pub dst_ports: Vec<u16>,
     pub packets: u64,
     pub bytes: u64,
     pub rule_hits: u64,
 }
 
+impl Default for AttemptEvent {
+    fn default() -> Self {
+        Self {
+            ts: 0,
+            proto: Proto::Tcp4,
+            dst_ports: Vec::new(),
+            packets: 0,
+            bytes: 0,
+            rule_hits: 0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DetectorState {
     pub last_seen_counters: BTreeMap<String, CounterSnapshot>,
     pub by_uid: BTreeMap<u32, Vec<AttemptEvent>>,
-    pub last_warn_epoch: BTreeMap<u32, u64>,
+    pub last_warn_epoch: BTreeMap<String, u64>,
     pub last_action_epoch: BTreeMap<String, u64>,
 }
 

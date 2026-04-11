@@ -1,3 +1,13 @@
 {
-  "note": "Stage6 no longer uses this file. Settings are loaded only from /data/adb/modules/PortGuard/settings/"
+  "note": "Stage 15 keeps protection focused on user-installed third-party apps only, excluding preinstalled system apps from candidate sources and protected owners, while keeping automatic network reapply and self-test support.",
+  "sample_config": {
+    "user_apps_only": true,
+    "tcp4_enabled": true,
+    "udp4_enabled": true,
+    "tcp6_enabled": true,
+    "udp6_enabled": true,
+    "active_self_test_enabled": true,
+    "self_test_timeout_ms": 1500,
+    "network_refresh_secs": 10
+  }
 }
