@@ -1,2 +1,0 @@
-# Пакеты, которым не ломаем localhost-доступ
-# com.example.portguardui

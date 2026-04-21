@@ -1,0 +1,25 @@
+# Build outputs
+out/
+
+# Rust
+rust/target/
+**/target/
+
+# Android / Gradle
+application/.gradle/
+application/build/
+application/app/build/
+application/local.properties
+
+# Generated embedded module assets
+application/app/src/main/assets/module.zip
+application/app/src/main/assets/module.prop
+
+# IDE
+.idea/
+*.iml
+
+# Signing keys
+/keystores/*.keystore
+/keystores/*.jks
+!/keystores/.gitkeep

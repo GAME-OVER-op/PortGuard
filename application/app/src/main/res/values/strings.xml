@@ -1,0 +1,343 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">PortGuard</string>
+    <string name="app_subtitle">Управление модулем защиты внутренних портов</string>
+
+    <string name="welcome_title">Добро пожаловать в PortGuard</string>
+    <string name="welcome_description">PortGuard — это приложение для управления root-модулем, который защищает внутренние порты, локальные сервисы и конфигурацию безопасности устройства.</string>
+    <string name="welcome_how_it_works_title">Что делает приложение</string>
+    <string name="welcome_how_it_works_body">Приложение работает только с файлами модуля по жёстко заданному пути и не использует локальный API. Оно позволяет включать и отключать защиту, управлять исключениями и в дальнейшем будет показывать состояние модуля и события детектора.</string>
+    <string name="welcome_root_title">Что такое root</string>
+    <string name="welcome_root_body">Root — это полный административный доступ к Android. Он нужен, потому что PortGuard меняет системные правила защиты и редактирует файлы модуля внутри системного раздела данных.</string>
+    <string name="welcome_requirements_title">Требования</string>
+    <string name="welcome_requirements_body">• Android 9 и выше
+• Наличие root-прав
+• Возможность установить модуль PortGuard</string>
+    <string name="welcome_language_note">Сейчас приложение работает только на русском, но вся текстовая часть уже вынесена в XML и готова к будущей локализации.</string>
+    <string name="welcome_continue">Продолжить</string>
+    <string name="welcome_system_supported">Система поддерживается: Android %1$d</string>
+    <string name="welcome_system_unsupported">Неподдерживаемая версия Android: %1$d</string>
+    <string name="welcome_system_unsupported_reason">PortGuard требует Android 9 или новее. На более старых версиях приложение не сможет безопасно работать с модулем и системной защитой.</string>
+    <string name="welcome_card_status_title">Совместимость устройства</string>
+
+    <string name="root_screen_title">Проверка root и установка модуля</string>
+    <string name="root_screen_description">Этот экран проверяет root-доступ, наличие модуля PortGuard и доступность жёстко заданной папки настроек. Здесь же расположена установка модуля прямо из приложения без API и без локального сервера.</string>
+    <string name="root_screen_summary_title">Сводка</string>
+    <string name="root_screen_check_button">Проверить root и модуль</string>
+    <string name="root_screen_checking_details">Проверяются root-команды, наличие модуля, installer backend и config.json</string>
+    <string name="root_screen_preview_title">Предпросмотр config.json</string>
+    <string name="root_screen_preview_description">Это прямое чтение конфигурации по root из /data/adb/modules/PortGuard/settings/config.json. Здесь нет API и нет локального сервера.</string>
+    <string name="root_screen_preview_label">config.json</string>
+    <string name="root_screen_preview_empty">Файл пока не найден или root-доступ не получен.</string>
+
+    <string name="root_status_title">Root-доступ</string>
+    <string name="root_status_unknown">Статус ещё не проверялся</string>
+    <string name="root_status_checking">Проверка root…</string>
+    <string name="root_status_granted">Root получен</string>
+    <string name="root_status_denied">Root не получен</string>
+    <string name="root_status_initial_hint">Нажми «Проверить», чтобы оценить root, наличие модуля и доступный способ установки.</string>
+    <string name="root_status_checking_message">Идёт проверка root, модуля, папки settings и installer backend…</string>
+
+    <string name="module_status_title">Модуль PortGuard</string>
+    <string name="module_status_found">Папка модуля найдена</string>
+    <string name="module_status_not_found">Папка модуля не найдена</string>
+
+    <string name="settings_status_title">Папка настроек</string>
+    <string name="settings_status_found">Папка settings доступна</string>
+    <string name="settings_status_not_found">Папка settings не найдена</string>
+
+    <string name="installer_status_title">Установщик и ZIP</string>
+    <string name="installer_status_value">Installer: %1$s</string>
+    <string name="installer_asset_ready">Встроенный ZIP модуля доступен в assets.</string>
+    <string name="installer_asset_missing">ZIP модуля ещё не встроен. Собери проект через корневой build.sh.</string>
+    <string name="installer_label_unknown">не определён</string>
+    <string name="installer_label_unavailable">недоступно</string>
+    <string name="installer_install_button">Установить модуль</string>
+    <string name="installer_export_button">Экспортировать ZIP</string>
+    <string name="installer_reboot_button">Перезагрузить устройство</string>
+    <string name="installer_reboot_needed">Модуль уже staged и ждёт перезагрузки для применения.</string>
+    <string name="installer_progress_installing">Выполняется установка модуля…</string>
+    <string name="installer_progress_rebooting">Отправляется команда перезагрузки…</string>
+    <string name="installer_log_title">Лог установки</string>
+    <string name="installer_log_description">Здесь показывается вывод подготовки ZIP, команды установки и ручного экспорта. Это рабочий лог, а не API-ответ.</string>
+    <string name="installer_log_label">Лог</string>
+    <string name="installer_log_empty">Лог пока пуст. После установки или экспорта здесь появится вывод команд.</string>
+    <string name="installer_log_start">Подготовка установки модуля…</string>
+    <string name="installer_export_start">Подготовка экспорта ZIP…</string>
+    <string name="installer_reboot_start">Подготовка команды перезагрузки…</string>
+
+    <string name="status_part_root_ok">Root получен</string>
+    <string name="status_part_module_found">модуль найден</string>
+    <string name="status_part_module_missing">модуль не найден</string>
+    <string name="status_part_settings_found">папка settings доступна</string>
+    <string name="status_part_settings_missing">папка settings отсутствует</string>
+    <string name="status_part_config_found">config.json найден</string>
+    <string name="status_part_config_missing">config.json пока не найден</string>
+    <string name="status_part_reboot_needed">нужна перезагрузка</string>
+    <string name="status_part_installer">installer: %1$s</string>
+    <string name="status_part_asset_ready">asset готов</string>
+    <string name="status_part_asset_missing">asset не встроен</string>
+
+    <string name="common_back">Назад</string>
+    <string name="common_stage_label">Этап 8 + 9</string>
+
+    <string name="dashboard_open_button">Открыть панель защиты</string>
+    <string name="dashboard_title">Панель защиты</string>
+    <string name="dashboard_subtitle">Прямое редактирование config.json без API</string>
+    <string name="dashboard_status_title">Текущее состояние PortGuard</string>
+    <string name="dashboard_status_empty">Сводка пока не собрана.</string>
+    <string name="dashboard_status_root_missing">Root не получен. Панель защиты недоступна.</string>
+    <string name="dashboard_status_config_loaded">config.json загружен</string>
+    <string name="dashboard_status_config_not_loaded">config.json ещё не загружен</string>
+    <string name="dashboard_protection_on_chip">Защита включена</string>
+    <string name="dashboard_protection_off_chip">Защита отключена</string>
+    <string name="dashboard_controls_title">Быстрые параметры</string>
+    <string name="dashboard_controls_description">Это первый рабочий экран прямого редактирования config.json. Здесь меняются ключевые параметры: активная защита, режим обучения и реакция на анализатор.</string>
+    <string name="dashboard_active_protection_title">Активная защита</string>
+    <string name="dashboard_active_protection_desc">При выключении демон должен удалить свои правила и перейти в режим ожидания. При включении защита работает как обычно.</string>
+    <string name="dashboard_learning_mode_title">Режим обучения</string>
+    <string name="dashboard_learning_mode_desc">В этом режиме PortGuard продолжает наблюдать и логировать активность, но агрессивные реакции отключаются.</string>
+    <string name="dashboard_loopback_only_title">Только loopback</string>
+    <string name="dashboard_loopback_only_desc">Ограничивает защиту loopback-соединениями. Это полезно как совместимый или более щадящий режим.</string>
+    <string name="dashboard_reaction_mode_title">Реакция на анализатор</string>
+    <string name="dashboard_reaction_mode_desc">Выбирает, что делать при обнаружении явного анализа локальных портов: только блокировать или пытаться остановить приложение.</string>
+    <string name="dashboard_reaction_off">Только блокировать</string>
+    <string name="dashboard_reaction_force_stop">Останавливать приложение</string>
+    <string name="dashboard_save_button">Применить изменения</string>
+    <string name="dashboard_create_config_button">Создать базовый config.json</string>
+    <string name="dashboard_open_setup_button">Вернуться к модулю и установке</string>
+    <string name="dashboard_save_success">Изменения сохранены в config.json.</string>
+    <string name="dashboard_save_failed">Не удалось сохранить config.json через root.</string>
+    <string name="dashboard_config_created">Базовый config.json создан.</string>
+    <string name="dashboard_config_create_failed">Не удалось создать базовый config.json.</string>
+    <string name="dashboard_config_preview_title">Предпросмотр конфигурации</string>
+    <string name="dashboard_config_preview_desc">Ниже показывается текущее содержимое config.json после чтения через root. Это позволяет сразу видеть, что приложение реально редактирует файл модуля, а не временную копию.</string>
+    <string name="dashboard_config_empty_after_load">config.json был найден, но его содержимое оказалось пустым после чтения.</string>
+    <string name="dashboard_config_missing_hint">config.json ещё не найден. Можно создать базовый файл через кнопку выше, если папка settings уже доступна.</string>
+
+
+    <string name="dashboard_open_exceptions_button">Открыть исключения</string>
+
+    <string name="exceptions_title">Исключения и доверенные правила</string>
+    <string name="exceptions_subtitle">Редактирование trusted packages, trusted uids и реакций без API</string>
+    <string name="exceptions_status_title">Исключения PortGuard</string>
+    <string name="exceptions_status_desc">Этот экран позволяет настроить приложения и UID, которым не нужно ломать localhost-доступ, а также пакеты, которые нельзя force-stop или считать сканером.</string>
+    <string name="exceptions_chip_apps_count">Приложений: %1$d</string>
+    <string name="exceptions_chip_selected_count">Выбрано: %1$d</string>
+    <string name="exceptions_tabs_title">Категории исключений</string>
+    <string name="exceptions_tab_trusted_packages">Доверенные пакеты</string>
+    <string name="exceptions_tab_kill_exceptions">Не останавливать</string>
+    <string name="exceptions_tab_scan_ignore">Игнорировать как сканер</string>
+    <string name="exceptions_tab_trusted_uids">Доверенные UID</string>
+    <string name="exceptions_search_title">Поиск приложений</string>
+    <string name="exceptions_search_label">Название или package name</string>
+    <string name="exceptions_selected_trusted_packages">Сейчас доверены</string>
+    <string name="exceptions_selected_kill_exceptions">Сейчас защищены от force-stop</string>
+    <string name="exceptions_selected_scan_ignore">Сейчас игнорируются как сканер</string>
+    <string name="exceptions_selected_trusted_uids">Текущие доверенные UID</string>
+    <string name="exceptions_selected_empty">Список пока пуст.</string>
+    <string name="exceptions_uid_title">Доверенные UID</string>
+    <string name="exceptions_uid_desc">UID из этого списка вообще не должны блокироваться, считаться анализатором или попадать под force-stop.</string>
+    <string name="exceptions_uid_label">Введите UID</string>
+    <string name="exceptions_uid_add_button">Добавить UID</string>
+    <string name="exceptions_uid_list_title">Список доверенных UID</string>
+    <string name="exceptions_uid_empty_hint">UID пока не добавлены. Введи числовой UID и сохрани его в trusted_uids.txt.</string>
+    <string name="exceptions_uid_remove_button">Удалить</string>
+    <string name="exceptions_uid_empty">Введите UID перед сохранением.</string>
+    <string name="exceptions_save_success">Список исключений сохранён.</string>
+    <string name="exceptions_save_failed">Не удалось сохранить список исключений через root.</string>
+    <string name="exceptions_uid_saved">trusted_uids.txt обновлён.</string>
+
+
+    <string name="dashboard_open_advanced_button">Чувствительность и производительность</string>
+
+    <string name="advanced_settings_title">Детектор и производительность</string>
+    <string name="advanced_settings_subtitle">Тонкая настройка чувствительности и нагрузки без API</string>
+    <string name="advanced_settings_status_title">Расширенные параметры PortGuard</string>
+    <string name="advanced_settings_status_waiting">Сводка состояния ещё не собрана.</string>
+    <string name="advanced_settings_save_button">Сохранить параметры</string>
+    <string name="advanced_settings_save_success">Расширенные параметры сохранены в config.json.</string>
+    <string name="advanced_settings_save_failed">Не удалось сохранить расширенные параметры через root.</string>
+    <string name="advanced_settings_load_failed">Не удалось загрузить config.json для расширенной настройки.</string>
+    <string name="advanced_settings_invalid_number">Одно или несколько числовых полей заполнены некорректно.</string>
+
+    <string name="advanced_detector_section_title">Чувствительность детектора</string>
+    <string name="advanced_detector_section_desc">Эти параметры определяют, когда PortGuard считает активность приложения анализом локальных портов и как быстро он поднимает уровень подозрения.</string>
+    <string name="advanced_unique_ports_title">Порог уникальных портов</string>
+    <string name="advanced_unique_ports_desc">Сколько разных портов приложение должно задеть за одно окно анализа, чтобы поведение считалось подозрительным.</string>
+    <string name="advanced_attempts_title">Порог попыток</string>
+    <string name="advanced_attempts_desc">Минимальное число заблокированных попыток в окне анализа, после которого активность считается подозрительной.</string>
+    <string name="advanced_rule_hits_title">Порог попаданий по правилам</string>
+    <string name="advanced_rule_hits_desc">Сколько попаданий в firewall-правила PortGuard нужно накопить, чтобы детектор поднял инцидент даже при grouped multiport-правилах.</string>
+    <string name="advanced_scan_window_title">Окно анализа</string>
+    <string name="advanced_scan_window_desc">Интервал в секундах, внутри которого PortGuard объединяет попытки доступа в одну волну анализа.</string>
+    <string name="advanced_warn_cooldown_title">Пауза между предупреждениями</string>
+    <string name="advanced_warn_cooldown_desc">Минимальная пауза в секундах между повторными предупреждениями об одном и том же приложении, чтобы не засорять журнал.</string>
+    <string name="advanced_reaction_cooldown_title">Пауза между реакциями</string>
+    <string name="advanced_reaction_cooldown_desc">Минимальный интервал в секундах между активными реакциями вроде force-stop на один и тот же пакет.</string>
+
+    <string name="advanced_performance_section_title">Производительность и автономность</string>
+    <string name="advanced_performance_section_desc">Эти параметры влияют на нагрузку демона, частоту перечитывания настроек и объём фоновой диагностики.</string>
+    <string name="advanced_loop_interval_title">Интервал основного цикла</string>
+    <string name="advanced_loop_interval_desc">Частота основного цикла демона в миллисекундах. Меньше — быстрее реакция, но выше нагрузка.</string>
+    <string name="advanced_reload_check_title">Проверка обновления настроек</string>
+    <string name="advanced_reload_check_desc">Как часто демон перечитывает файлы настроек модуля в секундах. По твоему решению здесь базовое значение 30 секунд.</string>
+    <string name="advanced_package_refresh_title">Обновление кэша пакетов</string>
+    <string name="advanced_package_refresh_desc">Как часто обновлять кэш package/uid в секундах. Это влияет на скорость появления новых приложений в логах и исключениях.</string>
+    <string name="advanced_counter_refresh_title">Частота чтения счётчиков</string>
+    <string name="advanced_counter_refresh_desc">Через сколько циклов перечитывать счётчики правил. Большее значение уменьшает нагрузку, но замедляет детектор.</string>
+    <string name="advanced_resolve_process_title">Подробности процесса</string>
+    <string name="advanced_resolve_process_desc">Включает более глубокое чтение /proc для PID и cmdline владельцев сокетов. Полезно для диагностики, но может сильнее нагружать систему.</string>
+    <string name="advanced_loopback_only_desc">Повторяет параметр из панели защиты, но здесь он находится рядом с остальными совместимостями и нагрузкой. Включай его, если нужен более щадящий режим защиты.</string>
+
+
+    <string name="dashboard_open_incidents_button">Журнал и инциденты</string>
+    <string name="dashboard_runtime_title">Живое состояние модуля</string>
+    <string name="dashboard_runtime_missing">State-файлы модуля пока не найдены. Приложение продолжает работать по config.json, но живой статус и инциденты ещё недоступны.</string>
+    <string name="dashboard_state_files_ready">state-файлы найдены</string>
+    <string name="dashboard_runtime_protection_on">активная защита: on</string>
+    <string name="dashboard_runtime_protection_off">активная защита: off</string>
+    <string name="dashboard_runtime_protection_unknown">активная защита: неизвестно</string>
+    <string name="dashboard_runtime_standby">режим ожидания</string>
+    <string name="dashboard_runtime_ports">защищённых портов: %1$d</string>
+    <string name="dashboard_runtime_rules">активных правил: %1$d</string>
+    <string name="dashboard_runtime_backend">backend: %1$s</string>
+    <string name="dashboard_runtime_updated">обновлено: %1$s</string>
+    <string name="dashboard_runtime_blocked_ports">Сейчас защищаются порты: %1$s</string>
+    <string name="dashboard_latest_incident_title">Последний инцидент</string>
+    <string name="dashboard_latest_incident_empty">Журнал инцидентов пока пуст.</string>
+    <string name="dashboard_latest_incident_uid">UID %1$s</string>
+    <string name="dashboard_latest_incident_ports">Порты: %1$s</string>
+    <string name="dashboard_runtime_json_title">Предпросмотр summary.json</string>
+    <string name="dashboard_runtime_json_desc">Если демон уже пишет state-файлы, ниже показывается содержимое summary.json. Это удобный способ понять, что приложение читает живое состояние PortGuard, а не только config.json.</string>
+    <string name="dashboard_runtime_json_label">summary.json</string>
+
+    <string name="incidents_title">Журнал PortGuard</string>
+    <string name="incidents_subtitle">Последние события и попытки анализа локальных портов</string>
+    <string name="incidents_status_title">События и инциденты</string>
+    <string name="incidents_root_required">Root нужен для чтения журнала инцидентов.</string>
+    <string name="incidents_file_found">incidents.jsonl найден</string>
+    <string name="incidents_file_missing">incidents.jsonl не найден</string>
+    <string name="incidents_status_loaded">Загружено событий: %1$d</string>
+    <string name="incidents_status_empty">Файл инцидентов найден, но событий пока нет.</string>
+    <string name="incidents_status_missing_file">State-файлы модуля пока отсутствуют. Журнал станет доступен, когда демон начнёт писать incidents.jsonl.</string>
+    <string name="incidents_empty_title">События пока отсутствуют</string>
+    <string name="incidents_empty_desc">Когда PortGuard начнёт писать incidents.jsonl, здесь появятся последние срабатывания детектора и реакции модуля.</string>
+    <string name="incidents_empty_missing_file">Файл incidents.jsonl ещё не найден. Это нормально, если демон пока не писал state-файлы.</string>
+    <string name="incidents_clear_success">Файл incidents.jsonl очищен.</string>
+    <string name="incidents_clear_failed">Не удалось очистить incidents.jsonl через root.</string>
+    <string name="incidents_item_no_message">Событие без текстового описания</string>
+    <string name="incidents_item_time">Время: %1$s</string>
+    <string name="incidents_item_level">Уровень: %1$s</string>
+    <string name="incidents_item_uid">UID: %1$s</string>
+    <string name="incidents_item_packages">Пакеты: %1$s</string>
+    <string name="incidents_item_ports">Порты: %1$s</string>
+    <string name="incidents_item_action">Действие: %1$s</string>
+
+<string name="dashboard_open_maintenance_button">Пресеты и обслуживание</string>
+
+<string name="maintenance_title">Пресеты и обслуживание</string>
+<string name="maintenance_subtitle">Быстрые режимы, резервные копии и сервисные действия модуля</string>
+<string name="maintenance_status_title">Состояние обслуживания</string>
+<string name="maintenance_status_initial">Открой этот экран, чтобы применять пресеты, обслуживать модуль и работать с резервной копией настроек.</string>
+<string name="maintenance_presets_title">Готовые пресеты</string>
+<string name="maintenance_presets_desc">Пресеты быстро меняют ключевые параметры PortGuard без ручной правки множества полей. Это удобно для старта или быстрого возврата к понятному профилю работы.</string>
+<string name="maintenance_preset_balanced_title">Сбалансированный</string>
+<string name="maintenance_preset_balanced_desc">Спокойный рабочий режим с умеренной чувствительностью и без force-stop. Подходит как базовый профиль для повседневного использования.</string>
+<string name="maintenance_preset_strict_title">Строгий</string>
+<string name="maintenance_preset_strict_desc">Более частый контроль и более быстрый детектор при сохранении безопасной реакции без force-stop.</string>
+<string name="maintenance_preset_aggressive_title">Агрессивный</string>
+<string name="maintenance_preset_aggressive_desc">Самый жёсткий профиль: чувствительный детектор, частые проверки и режим force-stop для явного анализатора.</string>
+<string name="maintenance_apply_preset_button">Применить пресет</string>
+
+<string name="maintenance_backup_title">Резервная копия настроек</string>
+<string name="maintenance_backup_desc">Экспорт собирает config.json и все списки исключений в единый JSON-файл в Download/PortGuard. Импорт читает именно последнюю резервную копию по фиксированному пути без выбора файла.</string>
+<string name="maintenance_export_backup_button">Экспортировать резервную копию</string>
+<string name="maintenance_import_backup_button">Импортировать резервную копию</string>
+<string name="maintenance_reset_button">Сбросить к рекомендуемым значениям</string>
+<string name="maintenance_backup_path">Последняя резервная копия: %1$s</string>
+
+<string name="maintenance_module_actions_title">Сервисные действия модуля</string>
+<string name="maintenance_module_actions_desc">Здесь собраны действия обслуживания: переустановка модуля, экспорт ZIP в Download и отправка команды перезагрузки устройства.</string>
+<string name="maintenance_reinstall_button">Переустановить модуль</string>
+<string name="maintenance_export_module_button">Экспортировать ZIP модуля</string>
+<string name="maintenance_reboot_button">Перезагрузить устройство</string>
+<string name="maintenance_log_title">Лог последних действий</string>
+<string name="maintenance_action_installing">Подготовка переустановки модуля…</string>
+<string name="maintenance_install_success">Команда переустановки модуля выполнена.</string>
+<string name="maintenance_module_zip_exported">ZIP модуля экспортирован в Download.</string>
+<string name="maintenance_reboot_sent">Команда перезагрузки отправлена.</string>
+
+
+    <string name="common_confirm">Подтвердить</string>
+    <string name="common_cancel">Отмена</string>
+    <string name="incidents_clear_dialog_title">Очистить журнал инцидентов?</string>
+    <string name="incidents_clear_dialog_message">Файл incidents.jsonl будет очищен. Это удалит все отображаемые события из журнала приложения.</string>
+    <string name="incidents_level_info">INFO</string>
+    <string name="maintenance_asset_present">ZIP встроен</string>
+    <string name="maintenance_asset_missing">ZIP не встроен</string>
+    <string name="maintenance_import_dialog_title">Импортировать резервную копию?</string>
+    <string name="maintenance_import_dialog_message">Текущие настройки PortGuard будут заменены содержимым последней резервной копии из Download/PortGuard.</string>
+    <string name="maintenance_reset_dialog_title">Сбросить настройки?</string>
+    <string name="maintenance_reset_dialog_message">Будут записаны рекомендуемые значения и очищены текущие пользовательские настройки, которые не входят в базовый профиль.</string>
+    <string name="maintenance_reinstall_dialog_title">Переустановить модуль?</string>
+    <string name="maintenance_reinstall_dialog_message">Приложение попытается заново установить модуль PortGuard через доступный менеджер рут-модулей. Используй это, если модуль повреждён или требует переустановки.</string>
+    <string name="maintenance_reboot_dialog_title">Перезагрузить устройство?</string>
+    <string name="maintenance_reboot_dialog_message">Будет отправлена команда немедленной перезагрузки устройства. Сохрани важные данные перед подтверждением.</string>
+
+
+
+    <string name="dashboard_open_diagnostics_button">О программе и диагностика</string>
+
+    <string name="diagnostics_title">О программе и диагностика</string>
+    <string name="diagnostics_subtitle">Версии, пути модуля, raw-файлы и проверка состояния</string>
+    <string name="diagnostics_status_title">Сводка диагностики</string>
+    <string name="diagnostics_root_missing">Root не получен. Диагностика raw-файлов недоступна.</string>
+    <string name="diagnostics_refreshed">Диагностика обновлена.</string>
+
+    <string name="diagnostics_about_title">О приложении</string>
+    <string name="diagnostics_about_desc">Этот экран помогает быстро проверить, что именно видит приложение: версии, пути модуля, найденные state-файлы и raw-содержимое конфигурации.</string>
+    <string name="diagnostics_app_version">Версия приложения: %1$s (%2$d)</string>
+    <string name="diagnostics_android_version">Система: %1$s</string>
+    <string name="diagnostics_module_version">Версия модуля: %1$s (%2$s)</string>
+    <string name="diagnostics_installer_value">Установщик: %1$s</string>
+
+    <string name="diagnostics_paths_title">Жёстко заданные пути</string>
+    <string name="diagnostics_paths_desc">Приложение работает только с root и файлами модуля. Никакого локального API здесь нет: все настройки и state-файлы читаются по фиксированным путям.</string>
+
+    <string name="diagnostics_files_title">Состояние файлов</string>
+    <string name="diagnostics_files_desc">Здесь видно, какие файлы реально найдены, и являются ли JSON-файлы валидными. Это удобно для отладки битого config.json или неполных state-файлов.</string>
+    <string name="diagnostics_file_config">config.json</string>
+    <string name="diagnostics_file_status">status.json</string>
+    <string name="diagnostics_file_summary">summary.json</string>
+    <string name="diagnostics_file_incidents">incidents.jsonl</string>
+    <string name="diagnostics_file_found_short">найден</string>
+    <string name="diagnostics_file_missing_short">нет</string>
+    <string name="diagnostics_json_valid">JSON валиден</string>
+    <string name="diagnostics_json_invalid">JSON битый</string>
+
+    <string name="diagnostics_state_dir_found">папка state найдена</string>
+    <string name="diagnostics_state_dir_missing">папка state не найдена</string>
+    <string name="diagnostics_config_found">config.json найден</string>
+    <string name="diagnostics_config_missing">config.json не найден</string>
+    <string name="diagnostics_status_found">status.json найден</string>
+    <string name="diagnostics_status_missing">status.json не найден</string>
+    <string name="diagnostics_summary_found">summary.json найден</string>
+    <string name="diagnostics_summary_missing">summary.json не найден</string>
+    <string name="diagnostics_incidents_found">incidents.jsonl найден</string>
+    <string name="diagnostics_incidents_missing">incidents.jsonl не найден</string>
+
+    <string name="diagnostics_raw_config_title">Raw config.json</string>
+    <string name="diagnostics_raw_config_desc">Здесь показывается прямое содержимое config.json, как оно лежит в модуле. Это полезно, если конфиг оказался повреждён, потому что основной UI в таком случае может fallback-нуться на значения по умолчанию.</string>
+    <string name="diagnostics_raw_config_empty">config.json пока отсутствует.</string>
+    <string name="diagnostics_raw_status_title">Raw status.json</string>
+    <string name="diagnostics_raw_status_desc">Если демон пишет status.json, здесь можно быстро увидеть его без чтения консольного лога.</string>
+    <string name="diagnostics_raw_status_empty">status.json пока отсутствует.</string>
+    <string name="diagnostics_raw_summary_title">Raw summary.json</string>
+    <string name="diagnostics_raw_summary_desc">Краткая JSON-сводка состояния демона. Если этот файл есть, Dashboard может показывать живое состояние PortGuard.</string>
+    <string name="diagnostics_raw_summary_empty">summary.json пока отсутствует.</string>
+    <string name="diagnostics_raw_incidents_title">Raw incidents.jsonl</string>
+    <string name="diagnostics_raw_incidents_desc">Последние строки incidents.jsonl. Полезно для быстрой отладки, если нужно увидеть журнал именно как файл, а не как карточки UI.</string>
+    <string name="diagnostics_raw_incidents_empty">incidents.jsonl пока отсутствует или пуст.</string>
+
+</resources>

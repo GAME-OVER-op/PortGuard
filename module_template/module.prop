@@ -1,0 +1,7 @@
+id=PortGuard
+name=PortGuard
+version=1.0.1
+versionCode=10100
+author=Ggover 
+description=Защита локальных портов от вредоносных программ.
+

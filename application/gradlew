@@ -1,0 +1,17 @@
+#!/usr/bin/env sh
+
+# Wrapper jar is not bundled in this environment.
+# If gradle-wrapper.jar is missing, fallback to system gradle.
+APP_HOME=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+WRAPPER_JAR="$APP_HOME/gradle/wrapper/gradle-wrapper.jar"
+if [ -f "$WRAPPER_JAR" ]; then
+  exec java -classpath "$WRAPPER_JAR" org.gradle.wrapper.GradleWrapperMain "$@"
+fi
+if command -v gradle >/dev/null 2>&1; then
+  exec gradle "$@"
+fi
+printf '%s
+' 'gradle-wrapper.jar not found and system gradle is unavailable.' >&2
+printf '%s
+' 'Install Gradle in Termux or generate the wrapper locally.' >&2
+exit 1
