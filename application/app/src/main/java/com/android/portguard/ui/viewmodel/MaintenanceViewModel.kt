@@ -68,7 +68,7 @@ class MaintenanceViewModel(app: Application) : AndroidViewModel(app) {
         if (_uiState.value.working) return
         _uiState.value = _uiState.value.copy(working = true, infoMessage = null, errorMessage = null, actionLog = str(R.string.installer_export_start))
         viewModelScope.launch(Dispatchers.IO) {
-            val result = installerRepository.exportModuleZipToSdcard()
+            val result = installerRepository.exportModuleZipToInternalStorage()
             _uiState.value = _uiState.value.copy(
                 working = false,
                 infoMessage = if (result.success) str(R.string.maintenance_module_zip_exported) else null,

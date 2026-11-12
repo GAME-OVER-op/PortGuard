@@ -6,10 +6,11 @@ fn parse_ipv4_le(hex: &str) -> Result<String> {
     if hex.len() != 8 {
         anyhow::bail!("bad ipv4 hex length: {hex}");
     }
-    let bytes = (0..4)
-        .map(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16))
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .with_context(|| format!("parse ipv4 bytes from {hex}"))?;
+    let mut bytes = [0_u8; 4];
+    for i in 0..4 {
+        bytes[i] = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16)
+            .with_context(|| format!("parse ipv4 bytes from {hex}"))?;
+    }
     Ok(format!("{}.{}.{}.{}", bytes[3], bytes[2], bytes[1], bytes[0]))
 }
 
@@ -21,15 +22,13 @@ fn parse_ipv6_proc_addr(hex: &str) -> Result<String> {
     let mut out = [0_u8; 16];
     for (chunk_idx, chunk) in hex.as_bytes().chunks(8).enumerate() {
         let chunk = std::str::from_utf8(chunk)?;
-        let bytes = (0..4)
-            .map(|i| u8::from_str_radix(&chunk[i * 2..i * 2 + 2], 16))
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .with_context(|| format!("parse ipv6 bytes from {chunk}"))?;
         let start = chunk_idx * 4;
-        out[start] = bytes[3];
-        out[start + 1] = bytes[2];
-        out[start + 2] = bytes[1];
-        out[start + 3] = bytes[0];
+        for i in 0..4 {
+            let byte = u8::from_str_radix(&chunk[i * 2..i * 2 + 2], 16)
+                .with_context(|| format!("parse ipv6 bytes from {chunk}"))?;
+            // /proc/net/*6 stores each 32-bit word in little-endian byte order.
+            out[start + (3 - i)] = byte;
+        }
     }
 
     Ok(Ipv6Addr::from(out).to_string())
@@ -73,30 +72,40 @@ fn read_socket_table(path: &str, proto: Proto) -> Result<Vec<SocketEntry>> {
         if idx == 0 || line.trim().is_empty() {
             continue;
         }
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() < 10 {
-            continue;
-        }
 
-        let local = parts[1];
-        let remote = parts[2];
-        let state = parts[3];
-        let uid_str = parts[7];
-        let inode_str = parts[9];
+        // /proc/net tables are hot-path input. Avoid allocating a Vec for every
+        // row, and treat one malformed/transient row as skippable instead of
+        // aborting discovery for the entire protocol.
+        let mut parts = line.split_ascii_whitespace();
+        let Some(_slot) = parts.next() else { continue };
+        let Some(local) = parts.next() else { continue };
+        let Some(remote) = parts.next() else { continue };
+        let Some(state) = parts.next() else { continue };
+        // Skip tx_queue:rx_queue, tr:tm->when and retrnsmt.
+        let Some(uid_str) = parts.nth(3) else { continue };
+        let Some(_timeout) = parts.next() else { continue };
+        let Some(inode_str) = parts.next() else { continue };
 
         let Some((ip_hex, port_hex)) = local.split_once(':') else {
             continue;
         };
 
-        let port = u16::from_str_radix(port_hex, 16)
-            .with_context(|| format!("parse port from {port_hex}"))?;
+        let Ok(port) = u16::from_str_radix(port_hex, 16) else {
+            continue;
+        };
         if !include_entry(proto, state, port, remote) {
             continue;
         }
 
-        let local_ip = parse_local_ip(proto, ip_hex)?;
-        let uid = uid_str.parse::<u32>().unwrap_or(0);
-        let inode = inode_str.parse::<u64>().unwrap_or(0);
+        let Ok(local_ip) = parse_local_ip(proto, ip_hex) else {
+            continue;
+        };
+        let Ok(uid) = uid_str.parse::<u32>() else {
+            continue;
+        };
+        let Ok(inode) = inode_str.parse::<u64>() else {
+            continue;
+        };
 
         out.push(SocketEntry {
             proto,

@@ -41,4 +41,7 @@ data class InstallerFlowUiState(
     val rebooting: Boolean = false,
     val installProgress: Int = 0,
     val installPhase: String = "",
+    val showSaveFallbackPrompt: Boolean = false,
+    val savingFallbackZip: Boolean = false,
+    val fallbackSavedPath: String? = null,
 )

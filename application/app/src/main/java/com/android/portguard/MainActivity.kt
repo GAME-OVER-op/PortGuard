@@ -97,6 +97,8 @@ private fun PortGuardApp(
                         state = state,
                         onInstall = vm::installModule,
                         onReboot = vm::rebootDevice,
+                        onSaveFallback = vm::saveModuleZipFallback,
+                        onDismissSaveFallback = vm::dismissSaveFallbackPrompt,
                     )
 
                     InstallerStep.READY -> MainHubScreen()

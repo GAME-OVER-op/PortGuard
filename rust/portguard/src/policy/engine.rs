@@ -48,6 +48,18 @@ fn any_owner_package_in(list: &[String], listener: &Listener) -> bool {
         .any(|pkg| list.iter().any(|v| v == pkg))
 }
 
+pub fn select_protected_listeners(cfg: &Config, listeners: &[Listener]) -> Vec<Listener> {
+    listeners
+        .iter()
+        .filter(|listener| {
+            (!cfg.protect_loopback_only
+                || is_loopback_reachable_bind(listener.proto, &listener.local_ip))
+                && !any_owner_package_in(&cfg.ignored_owner_packages, listener)
+        })
+        .cloned()
+        .collect()
+}
+
 pub fn build(cfg: &Config, listeners: &[Listener], packages: &PackageIndex) -> Result<PolicyDecision> {
     let trusted_from_packages = packages.resolve_uids_for_packages(&cfg.trusted_client_packages);
     let mut trusted_client_uids: BTreeSet<u32> = cfg.trusted_client_uids.iter().copied().collect();
@@ -59,15 +71,7 @@ pub fn build(cfg: &Config, listeners: &[Listener], packages: &PackageIndex) -> R
         packages.all_known_uids()
     };
 
-    let protected_listeners: Vec<Listener> = listeners
-        .iter()
-        .filter(|listener| {
-            (!cfg.protect_loopback_only
-                || is_loopback_reachable_bind(listener.proto, &listener.local_ip))
-                && !any_owner_package_in(&cfg.ignored_owner_packages, listener)
-        })
-        .cloned()
-        .collect();
+    let protected_listeners = select_protected_listeners(cfg, listeners);
 
     let mut rules_set: BTreeSet<DesiredRule> = BTreeSet::new();
 
@@ -79,12 +83,18 @@ pub fn build(cfg: &Config, listeners: &[Listener], packages: &PackageIndex) -> R
             if trusted_client_uids.contains(uid) {
                 continue;
             }
-            rules_set.insert(DesiredRule {
+            let inserted = rules_set.insert(DesiredRule {
                 proto: listener.proto,
                 blocked_uid: *uid,
                 dst_port: listener.port,
                 owner_uid: listener.uid,
             });
+            if inserted && rules_set.len() > cfg.max_rules {
+                bail!(
+                    "desired rule count exceeded max_rules {} while building policy",
+                    cfg.max_rules
+                );
+            }
         }
     }
 

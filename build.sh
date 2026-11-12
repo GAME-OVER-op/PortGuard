@@ -31,6 +31,7 @@ TERMUX_PREFIX_DEFAULT="/data/data/com.termux/files/usr"
 TERMUX_PREFIX="${PREFIX:-$TERMUX_PREFIX_DEFAULT}"
 CARGO_BIN=""
 RUSTC_BIN=""
+ANDROID_RUST_TARGET="aarch64-linux-android"
 
 msg() { printf '[PortGuard] %s\n' "$*"; }
 warn() { printf '[PortGuard][WARN] %s\n' "$*" >&2; }
@@ -61,6 +62,79 @@ resolve_rust_tools() {
   [[ -n "$RUSTC_BIN" ]] || fail "rustc not found"
 }
 
+resolve_rust_target() {
+  local host
+  host="$($RUSTC_BIN -vV 2>/dev/null | awk '/^host: /{print $2}')"
+  [[ -n "$host" ]] || fail "Cannot determine rustc host target"
+
+  if [[ -n "${CARGO_BUILD_TARGET:-}" && "$CARGO_BUILD_TARGET" != "$ANDROID_RUST_TARGET" ]]; then
+    fail "PortGuard module is arm64 Android only. CARGO_BUILD_TARGET must be $ANDROID_RUST_TARGET, got $CARGO_BUILD_TARGET"
+  fi
+
+  if [[ "$host" == "$ANDROID_RUST_TARGET" ]]; then
+    # Native Termux/Android build. No explicit --target is required and using
+    # one can require a separately installed rustup std component.
+    CARGO_BUILD_TARGET=""
+  else
+    # Never silently package a Linux/macOS/Windows host ELF into the Android
+    # module. Cross-build explicitly for Android arm64.
+    CARGO_BUILD_TARGET="$ANDROID_RUST_TARGET"
+  fi
+  export CARGO_BUILD_TARGET
+  msg "Rust host: $host" >&2
+  msg "Rust output target: ${CARGO_BUILD_TARGET:-$host}" >&2
+}
+
+resolve_android_ndk_dir() {
+  local candidate sdk latest
+  for candidate in "${ANDROID_NDK_HOME:-}" "${ANDROID_NDK_ROOT:-}"; do
+    if [[ -n "$candidate" && -d "$candidate/toolchains/llvm/prebuilt" ]]; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  done
+
+  sdk="$(resolve_android_sdk_dir || true)"
+  if [[ -n "$sdk" ]]; then
+    if [[ -d "$sdk/ndk" ]]; then
+      latest="$(find "$sdk/ndk" -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null | sort -V | tail -n1)"
+      if [[ -n "$latest" && -d "$latest/toolchains/llvm/prebuilt" ]]; then
+        printf '%s' "$latest"
+        return 0
+      fi
+    fi
+    if [[ -d "$sdk/ndk-bundle/toolchains/llvm/prebuilt" ]]; then
+      printf '%s' "$sdk/ndk-bundle"
+      return 0
+    fi
+  fi
+  return 1
+}
+
+configure_android_rust_linker() {
+  [[ "${CARGO_BUILD_TARGET:-}" == "$ANDROID_RUST_TARGET" ]] || return 0
+  if [[ -n "${CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER:-}" ]]; then
+    [[ -x "$CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER" ]] || \
+      fail "Configured Android Rust linker is not executable: $CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER"
+    return 0
+  fi
+
+  local ndk host_tag linker
+  ndk="$(resolve_android_ndk_dir || true)"
+  [[ -n "$ndk" ]] || fail "Android NDK not found for cross-building Rust. Set ANDROID_NDK_HOME/ANDROID_NDK_ROOT or install an NDK in the Android SDK."
+
+  case "$(uname -s 2>/dev/null)" in
+    Linux) host_tag="linux-x86_64" ;;
+    Darwin) host_tag="darwin-x86_64" ;;
+    *) fail "Unsupported host for automatic Android NDK linker detection: $(uname -s 2>/dev/null)" ;;
+  esac
+
+  linker="$ndk/toolchains/llvm/prebuilt/$host_tag/bin/aarch64-linux-android28-clang"
+  [[ -x "$linker" ]] || fail "Android NDK linker not found: $linker"
+  export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$linker"
+  msg "Android Rust linker: $linker" >&2
+}
+
 cargo_bin_path() {
   local profile="$1"
   local host
@@ -78,6 +152,7 @@ doctor() {
   [[ -d "$MODULE_TEMPLATE_DIR" ]] || fail "Missing module_template/"
   [[ -f "$RUST_PROJECT_DIR/Cargo.toml" ]] || fail "Missing rust/portguard/Cargo.toml"
   resolve_rust_tools
+  resolve_rust_target
   command -v zip >/dev/null 2>&1 || fail "zip not found"
   msg "Cargo: $CARGO_BIN"
   msg "Rustc: $RUSTC_BIN"
@@ -109,6 +184,8 @@ build_rust() {
   msg "Building Rust daemon" >&2
   mkdir -p "$CARGO_TARGET_DIR"
   resolve_rust_tools
+  resolve_rust_target
+  configure_android_rust_linker
   if [[ -n "${CARGO_BUILD_TARGET:-}" ]]; then
     CARGO_TARGET_DIR="$CARGO_TARGET_DIR" "$CARGO_BIN" build --manifest-path "$RUST_PROJECT_DIR/Cargo.toml" --release --target "$CARGO_BUILD_TARGET"
   else
@@ -117,6 +194,17 @@ build_rust() {
   local bin
   bin="$(cargo_bin_path release)"
   [[ -f "$bin" ]] || fail "Rust binary not found after build: $bin"
+
+  # A final sanity check catches stale/incorrect host binaries before packaging.
+  if command -v readelf >/dev/null 2>&1; then
+    local machine
+    machine="$(readelf -h "$bin" 2>/dev/null | awk -F: '/Machine:/{gsub(/^[ \t]+/, "", $2); print $2; exit}')"
+    [[ "$machine" == *AArch64* ]] || fail "Rust binary is not AArch64: ${machine:-unknown} ($bin)"
+  elif command -v file >/dev/null 2>&1; then
+    file "$bin" | grep -Eqi 'aarch64|ARM aarch64' || fail "Rust binary is not AArch64: $(file "$bin")"
+  else
+    warn "readelf/file not found; target selection is enforced but ELF architecture cannot be independently inspected"
+  fi
   printf '%s' "$bin"
 }
 

@@ -2,6 +2,8 @@ package com.android.portguard.data
 
 import com.android.portguard.core.PortGuardPaths
 import com.android.portguard.core.RootShell
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.json.JSONArray
 import org.json.JSONObject
 import java.time.LocalDateTime
@@ -10,9 +12,19 @@ import java.time.format.DateTimeFormatter
 class SettingsFileRepository(
     private val rootShell: RootShell,
 ) {
+    private companion object {
+        // Settings screens use separate ViewModels/Repository instances. A process-wide
+        // mutex makes every read-modify-write transaction atomic across all of them.
+        val configMutationMutex = Mutex()
+        val listMutationMutex = Mutex()
+    }
     suspend fun readConfigRaw(): String? = rootShell.readText(PortGuardPaths.CONFIG_JSON)
 
-    suspend fun writeConfigRaw(content: String): Boolean {
+    suspend fun writeConfigRaw(content: String): Boolean = configMutationMutex.withLock {
+        writeConfigRawUnlocked(content)
+    }
+
+    private suspend fun writeConfigRawUnlocked(content: String): Boolean {
         return rootShell.writeTextAtomic(PortGuardPaths.CONFIG_JSON, content)
     }
 
@@ -21,10 +33,10 @@ class SettingsFileRepository(
         return runCatching { parseConfig(raw) }.getOrNull()
     }
 
-    suspend fun ensureDefaultConfig(): Boolean {
-        if (!ensureSettingsLayout()) return false
-        if (rootShell.fileExists(PortGuardPaths.CONFIG_JSON)) return true
-        return writeConfigRaw(buildDefaultConfigJson().toString(2))
+    suspend fun ensureDefaultConfig(): Boolean = configMutationMutex.withLock {
+        if (!ensureSettingsLayout()) return@withLock false
+        if (rootShell.fileExists(PortGuardPaths.CONFIG_JSON)) return@withLock true
+        writeConfigRawUnlocked(buildDefaultConfigJson().toString(2))
     }
 
     suspend fun updateDashboardConfig(
@@ -32,13 +44,18 @@ class SettingsFileRepository(
         learningMode: Boolean,
         reactionMode: ReactionMode,
         protectLoopbackOnly: Boolean,
-    ): Boolean {
-        val json = loadMutableConfigJson() ?: return false
+    ): Boolean = mutateConfig { json ->
         json.put("active_protection", activeProtection.raw)
         json.put("learning_mode", learningMode)
         json.put("reaction_mode", reactionMode.raw)
         json.put("protect_loopback_only", protectLoopbackOnly)
-        return writeConfigRaw(json.toString(2))
+
+        // Reaction mode changes the real xtables counter cadence. Keep the stored
+        // detector window honest so UI and Rust use the same effective value.
+        val loopIntervalMs = json.optInt("loop_interval_ms", 3000).coerceAtLeast(500)
+        val counterRefreshLoops = json.optInt("counter_refresh_loops", 5).coerceAtLeast(5)
+        val minWindow = effectiveCounterRefreshSecs(loopIntervalMs, counterRefreshLoops, reactionMode)
+        json.put("scan_window_secs", json.optInt("scan_window_secs", 60).coerceAtLeast(minWindow))
     }
 
     suspend fun updateAdvancedConfig(
@@ -54,21 +71,27 @@ class SettingsFileRepository(
         counterRefreshLoops: Int,
         resolveProcessDetails: Boolean,
         protectLoopbackOnly: Boolean,
-    ): Boolean {
-        val json = loadMutableConfigJson() ?: return false
+    ): Boolean = mutateConfig { json ->
+        val normalizedLoopMs = loopIntervalMs.coerceAtLeast(500)
+        val normalizedCounterLoops = counterRefreshLoops.coerceAtLeast(5)
+        val reactionMode = ReactionMode.fromRaw(json.optString("reaction_mode"))
+        val minWindow = effectiveCounterRefreshSecs(
+            normalizedLoopMs,
+            normalizedCounterLoops,
+            reactionMode,
+        )
         json.put("suspicious_unique_ports", suspiciousUniquePorts.coerceAtLeast(1))
-        json.put("suspicious_attempts", suspiciousAttempts.coerceAtLeast(1))
-        json.put("suspicious_rule_hits", suspiciousRuleHits.coerceAtLeast(1))
-        json.put("scan_window_secs", scanWindowSecs.coerceAtLeast(1))
+        json.put("suspicious_attempts", suspiciousAttempts.coerceAtLeast(2))
+        json.put("suspicious_rule_hits", suspiciousRuleHits.coerceAtLeast(2))
+        json.put("scan_window_secs", scanWindowSecs.coerceAtLeast(minWindow))
         json.put("warn_cooldown_secs", warnCooldownSecs.coerceAtLeast(1))
         json.put("reaction_cooldown_secs", reactionCooldownSecs.coerceAtLeast(5))
-        json.put("loop_interval_ms", loopIntervalMs.coerceAtLeast(500))
+        json.put("loop_interval_ms", normalizedLoopMs)
         json.put("reload_check_secs", reloadCheckSecs.coerceAtLeast(30))
-        json.put("package_refresh_secs", packageRefreshSecs.coerceAtLeast(10))
-        json.put("counter_refresh_loops", counterRefreshLoops.coerceAtLeast(1))
+        json.put("package_refresh_secs", packageRefreshSecs.coerceAtLeast(120))
+        json.put("counter_refresh_loops", normalizedCounterLoops)
         json.put("resolve_process_details", resolveProcessDetails)
         json.put("protect_loopback_only", protectLoopbackOnly)
-        return writeConfigRaw(json.toString(2))
     }
 
 
@@ -81,18 +104,17 @@ class SettingsFileRepository(
         networkRefreshSecs: Int,
         activeSelfTestEnabled: Boolean,
         selfTestTimeoutMs: Int,
-    ): Boolean {
-        val json = loadMutableConfigJson() ?: return false
+    ): Boolean = mutateConfig { json ->
         json.put("tcp4_enabled", tcp4Enabled)
         json.put("udp4_enabled", udp4Enabled)
         json.put("tcp6_enabled", tcp6Enabled)
         json.put("udp6_enabled", udp6Enabled)
         json.put("user_apps_only", userAppsOnly)
-        json.put("network_refresh_secs", networkRefreshSecs.coerceAtLeast(2))
+        json.put("network_refresh_secs", networkRefreshSecs.coerceAtLeast(10))
         json.put("active_self_test_enabled", activeSelfTestEnabled)
         json.put("self_test_timeout_ms", selfTestTimeoutMs.coerceAtLeast(250))
-        return writeConfigRaw(json.toString(2))
     }
+
 
     suspend fun updateSystemConfig(
         chainName: String,
@@ -102,8 +124,7 @@ class SettingsFileRepository(
         packageUidSources: List<String>,
         summaryPortLimit: Int,
         ignoredOwnerPackages: List<String>,
-    ): Boolean {
-        val json = loadMutableConfigJson() ?: return false
+    ): Boolean = mutateConfig { json ->
         json.put("chain_name", chainName.ifBlank { "PORTGUARD" })
         json.put("state_dir", stateDir.ifBlank { PortGuardPaths.STATE_DIR })
         json.put("max_rules", maxRules.coerceAtLeast(1000))
@@ -111,8 +132,8 @@ class SettingsFileRepository(
         json.put("package_uid_sources", JSONArray(packageUidSources.filter { it.isNotBlank() }.distinct()))
         json.put("summary_port_limit", summaryPortLimit.coerceAtLeast(1))
         json.put("ignored_owner_packages", JSONArray(ignoredOwnerPackages.filter { it.isNotBlank() }.distinct()))
-        return writeConfigRaw(json.toString(2))
     }
+
 
     suspend fun readTrustedPackages(): List<String> = readList(PortGuardPaths.TRUSTED_PACKAGES)
     suspend fun readTrustedUids(): List<String> = readList(PortGuardPaths.TRUSTED_UIDS)
@@ -128,7 +149,7 @@ class SettingsFileRepository(
             .toList()
     }
 
-    suspend fun writeList(path: String, values: List<String>): Boolean {
+    suspend fun writeList(path: String, values: List<String>): Boolean = listMutationMutex.withLock {
         val normalized = values
             .map { it.trim() }
             .filter { it.isNotBlank() }
@@ -136,7 +157,7 @@ class SettingsFileRepository(
             .joinToString(separator = "\n")
 
         val payload = if (normalized.isBlank()) "" else "${normalized}\n"
-        return rootShell.writeTextAtomic(path = path, content = payload)
+        rootShell.writeTextAtomic(path = path, content = payload)
     }
 
     suspend fun ensureSettingsLayout(): Boolean {
@@ -146,30 +167,34 @@ class SettingsFileRepository(
     }
 
     suspend fun applyPreset(preset: PortGuardPreset): SettingsActionResult {
-        val json = loadMutableConfigJson() ?: return SettingsActionResult(false, "Не удалось загрузить config.json для применения пресета.")
-        when (preset) {
+        val saved = mutateConfig { json ->
+            when (preset) {
             PortGuardPreset.BALANCED -> {
                 json.put("active_protection", ActiveProtectionMode.ON.raw)
                 json.put("learning_mode", false)
                 json.put("reaction_mode", ReactionMode.OFF.raw)
                 json.put("protect_loopback_only", false)
                 json.put("suspicious_unique_ports", 2)
-                json.put("suspicious_attempts", 2)
-                json.put("suspicious_rule_hits", 1)
-                json.put("scan_window_secs", 10)
+                json.put("suspicious_attempts", 3)
+                json.put("suspicious_rule_hits", 3)
+                json.put("scan_window_secs", 60)
                 json.put("warn_cooldown_secs", 15)
                 json.put("reaction_cooldown_secs", 60)
                 json.put("loop_interval_ms", 3000)
                 json.put("reload_check_secs", 30)
-                json.put("package_refresh_secs", 60)
-                json.put("counter_refresh_loops", 2)
+                json.put("package_refresh_secs", 300)
+                json.put("counter_refresh_loops", 5)
                 json.put("resolve_process_details", false)
                 json.put("tcp4_enabled", true)
                 json.put("udp4_enabled", true)
                 json.put("tcp6_enabled", true)
                 json.put("udp6_enabled", true)
                 json.put("user_apps_only", true)
-                json.put("network_refresh_secs", 10)
+                json.put("network_refresh_secs", 30)
+                json.put("firewall_reconcile_secs", 300)
+                json.put("udp_stabilize_secs", 6)
+                json.put("udp_ephemeral_stabilize_secs", 45)
+                json.put("udp_grace_secs", 12)
                 json.put("active_self_test_enabled", true)
                 json.put("self_test_timeout_ms", 1500)
             }
@@ -179,15 +204,15 @@ class SettingsFileRepository(
                 json.put("reaction_mode", ReactionMode.OFF.raw)
                 json.put("protect_loopback_only", false)
                 json.put("suspicious_unique_ports", 2)
-                json.put("suspicious_attempts", 1)
-                json.put("suspicious_rule_hits", 1)
-                json.put("scan_window_secs", 12)
+                json.put("suspicious_attempts", 2)
+                json.put("suspicious_rule_hits", 2)
+                json.put("scan_window_secs", 60)
                 json.put("warn_cooldown_secs", 10)
                 json.put("reaction_cooldown_secs", 45)
                 json.put("loop_interval_ms", 2500)
                 json.put("reload_check_secs", 30)
-                json.put("package_refresh_secs", 45)
-                json.put("counter_refresh_loops", 1)
+                json.put("package_refresh_secs", 180)
+                json.put("counter_refresh_loops", 5)
                 json.put("resolve_process_details", false)
                 json.put("tcp4_enabled", true)
                 json.put("udp4_enabled", true)
@@ -195,6 +220,10 @@ class SettingsFileRepository(
                 json.put("udp6_enabled", true)
                 json.put("user_apps_only", true)
                 json.put("network_refresh_secs", 20)
+                json.put("firewall_reconcile_secs", 180)
+                json.put("udp_stabilize_secs", 5)
+                json.put("udp_ephemeral_stabilize_secs", 30)
+                json.put("udp_grace_secs", 10)
                 json.put("active_self_test_enabled", true)
                 json.put("self_test_timeout_ms", 1500)
             }
@@ -204,15 +233,15 @@ class SettingsFileRepository(
                 json.put("reaction_mode", ReactionMode.FORCE_STOP.raw)
                 json.put("protect_loopback_only", false)
                 json.put("suspicious_unique_ports", 2)
-                json.put("suspicious_attempts", 1)
-                json.put("suspicious_rule_hits", 1)
-                json.put("scan_window_secs", 15)
+                json.put("suspicious_attempts", 2)
+                json.put("suspicious_rule_hits", 2)
+                json.put("scan_window_secs", 30)
                 json.put("warn_cooldown_secs", 5)
                 json.put("reaction_cooldown_secs", 30)
                 json.put("loop_interval_ms", 2000)
                 json.put("reload_check_secs", 30)
-                json.put("package_refresh_secs", 30)
-                json.put("counter_refresh_loops", 1)
+                json.put("package_refresh_secs", 120)
+                json.put("counter_refresh_loops", 5)
                 json.put("resolve_process_details", false)
                 json.put("tcp4_enabled", true)
                 json.put("udp4_enabled", true)
@@ -220,11 +249,16 @@ class SettingsFileRepository(
                 json.put("udp6_enabled", true)
                 json.put("user_apps_only", true)
                 json.put("network_refresh_secs", 10)
+                json.put("firewall_reconcile_secs", 120)
+                json.put("udp_stabilize_secs", 3)
+                json.put("udp_ephemeral_stabilize_secs", 20)
+                json.put("udp_grace_secs", 8)
                 json.put("active_self_test_enabled", true)
                 json.put("self_test_timeout_ms", 1500)
             }
+            }
         }
-        return if (writeConfigRaw(json.toString(2))) {
+        return if (saved) {
             SettingsActionResult(
                 true,
                 when (preset) {
@@ -292,6 +326,9 @@ class SettingsFileRepository(
             ?: return SettingsActionResult(false, "Файл резервной копии повреждён и не является валидным JSON.")
 
         val configRaw = json.optString("config_raw").ifBlank { buildDefaultConfigJson().toString(2) }
+        if (runCatching { parseConfig(configRaw) }.isFailure) {
+            return SettingsActionResult(false, "В резервной копии config_raw содержит повреждённый JSON. Текущие настройки не изменены.")
+        }
         val trustedPackages = json.optJSONArray("trusted_packages").toStringList()
         val trustedUids = json.optJSONArray("trusted_uids").toStringList()
         val killExceptions = json.optJSONArray("kill_exceptions").toStringList()
@@ -311,12 +348,20 @@ class SettingsFileRepository(
         )
     }
 
+    private suspend fun mutateConfig(mutator: (JSONObject) -> Unit): Boolean =
+        configMutationMutex.withLock {
+            val json = loadMutableConfigJson() ?: return@withLock false
+            mutator(json)
+            writeConfigRawUnlocked(json.toString(2))
+        }
+
     private suspend fun loadMutableConfigJson(): JSONObject? {
         if (!ensureSettingsLayout()) return null
         val existing = readConfigRaw().orEmpty().trim()
-        return runCatching {
-            if (existing.isBlank()) buildDefaultConfigJson() else JSONObject(existing)
-        }.getOrElse { buildDefaultConfigJson() }
+        if (existing.isBlank()) return buildDefaultConfigJson()
+        // Never replace a malformed existing config with defaults as a side effect
+        // of changing one toggle. Surface the failure and preserve the file.
+        return runCatching { JSONObject(existing) }.getOrNull()
     }
 
     private fun JSONArray?.toStringList(): List<String> {

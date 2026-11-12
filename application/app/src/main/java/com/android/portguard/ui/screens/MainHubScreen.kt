@@ -528,7 +528,7 @@ private fun AdvancedTab(state: MainHubUiState, vm: MainHubViewModel) {
         }
         item {
             NumberEditCard(
-                title = "Чтение счётчиков каждые N циклов",
+                title = "Базовое чтение счётчиков, N циклов",
                 value = state.config.counterRefreshLoops.toString(),
                 onDone = vm::setCounterRefreshLoops,
             )

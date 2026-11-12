@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use std::{
     env,
+    io::Read,
     process::{Command, Stdio},
     thread,
     time::{Duration, Instant},
@@ -62,29 +63,62 @@ pub fn run(cmd: &str, args: &[&str]) -> Result<(i32, String)> {
 
 pub fn run_with_timeout(cmd: &str, args: &[&str], timeout: Duration) -> Result<(i32, String)> {
     let mut child = spawn_command(cmd, args)?;
+    let stdout = child
+        .stdout
+        .take()
+        .with_context(|| format!("capture stdout {cmd} {:?}", args))?;
+    let stderr = child
+        .stderr
+        .take()
+        .with_context(|| format!("capture stderr {cmd} {:?}", args))?;
+
+    // Drain both pipes while the process is running. Waiting for exit before
+    // reading can deadlock once a verbose command (notably iptables -S/-L on a
+    // large policy) fills the kernel pipe buffer.
+    let stdout_reader = thread::spawn(move || {
+        let mut reader = stdout;
+        let mut bytes = Vec::new();
+        let _ = reader.read_to_end(&mut bytes);
+        bytes
+    });
+    let stderr_reader = thread::spawn(move || {
+        let mut reader = stderr;
+        let mut bytes = Vec::new();
+        let _ = reader.read_to_end(&mut bytes);
+        bytes
+    });
+
     let started = Instant::now();
 
     loop {
-        match child.try_wait().with_context(|| format!("wait {cmd} {:?}", args))? {
-            Some(_) => {
-                let output = child
-                    .wait_with_output()
-                    .with_context(|| format!("read output {cmd} {:?}", args))?;
-                let rc = output.status.code().unwrap_or(-1);
+        let wait_result = match child.try_wait() {
+            Ok(result) => result,
+            Err(err) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = stdout_reader.join();
+                let _ = stderr_reader.join();
+                return Err(err).with_context(|| format!("wait {cmd} {:?}", args));
+            }
+        };
+        match wait_result {
+            Some(status) => {
+                let stdout = stdout_reader.join().unwrap_or_default();
+                let stderr = stderr_reader.join().unwrap_or_default();
                 let mut text = String::new();
-                text.push_str(&String::from_utf8_lossy(&output.stdout));
-                text.push_str(&String::from_utf8_lossy(&output.stderr));
-                return Ok((rc, text));
+                text.push_str(&String::from_utf8_lossy(&stdout));
+                text.push_str(&String::from_utf8_lossy(&stderr));
+                return Ok((status.code().unwrap_or(-1), text));
             }
             None => {
                 if started.elapsed() >= timeout {
                     let _ = child.kill();
-                    let output = child.wait_with_output().ok();
+                    let _ = child.wait();
+                    let stdout = stdout_reader.join().unwrap_or_default();
+                    let stderr = stderr_reader.join().unwrap_or_default();
                     let mut text = String::new();
-                    if let Some(output) = output {
-                        text.push_str(&String::from_utf8_lossy(&output.stdout));
-                        text.push_str(&String::from_utf8_lossy(&output.stderr));
-                    }
+                    text.push_str(&String::from_utf8_lossy(&stdout));
+                    text.push_str(&String::from_utf8_lossy(&stderr));
                     let summary = sanitize_output(text.trim());
                     if summary.is_empty() {
                         anyhow::bail!(

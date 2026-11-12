@@ -12,6 +12,7 @@ import com.android.portguard.data.PortGuardConfig
 import com.android.portguard.data.PortGuardStateRepository
 import com.android.portguard.data.ReactionMode
 import com.android.portguard.data.SettingsFileRepository
+import com.android.portguard.data.effectiveCounterRefreshSecs
 import com.android.portguard.data.parseTabLogSummary
 import com.android.portguard.ui.state.DetectionEntry
 import com.android.portguard.ui.state.MainHubTab
@@ -22,7 +23,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 class MainHubViewModel(app: Application) : AndroidViewModel(app) {
     private val rootShell = RootShell()
@@ -35,6 +39,8 @@ class MainHubViewModel(app: Application) : AndroidViewModel(app) {
     val uiState: StateFlow<MainHubUiState> = _uiState.asStateFlow()
 
     private var refreshJob: Job? = null
+    private val refreshMutex = Mutex()
+    private val settingsWriteMutex = Mutex()
     @Volatile
     private var settingsPrepared = false
 
@@ -81,8 +87,13 @@ class MainHubViewModel(app: Application) : AndroidViewModel(app) {
         val normalized = current.distinct().sorted()
         _uiState.value = _uiState.value.copy(trustedPackages = normalized)
         viewModelScope.launch(Dispatchers.IO) {
-            settingsRepository.writeList(PortGuardPaths.TRUSTED_PACKAGES, normalized)
-            signalSaved("Исключения сохранены")
+            settingsWriteMutex.withLock {
+                // Use the latest optimistic UI state. Rapid consecutive toggles can
+                // enqueue coroutines in a different order than the user's taps.
+                val latest = _uiState.value.trustedPackages.distinct().sorted()
+                val ok = settingsRepository.writeList(PortGuardPaths.TRUSTED_PACKAGES, latest)
+                signalSaved(if (ok) "Исключения сохранены" else "Ошибка сохранения исключений")
+            }
         }
     }
 
@@ -135,7 +146,7 @@ class MainHubViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setNetworkRefreshSecs(value: String) {
         val parsed = value.toIntOrNull() ?: return
-        val updated = _uiState.value.config.copy(networkRefreshSecs = parsed)
+        val updated = _uiState.value.config.copy(networkRefreshSecs = parsed.coerceAtLeast(10))
         updateTrafficRuntimeConfig(updated)
     }
 
@@ -147,13 +158,13 @@ class MainHubViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setPackageRefreshSecs(value: String) {
         val parsed = value.toIntOrNull() ?: return
-        val updated = _uiState.value.config.copy(packageRefreshSecs = parsed)
+        val updated = _uiState.value.config.copy(packageRefreshSecs = parsed.coerceAtLeast(120))
         updateAdvancedConfig(updated)
     }
 
     fun setCounterRefreshLoops(value: String) {
         val parsed = value.toIntOrNull() ?: return
-        val updated = _uiState.value.config.copy(counterRefreshLoops = parsed)
+        val updated = _uiState.value.config.copy(counterRefreshLoops = parsed.coerceAtLeast(5))
         updateAdvancedConfig(updated)
     }
 
@@ -164,112 +175,163 @@ class MainHubViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setSuspiciousAttempts(value: String) {
         val parsed = value.toIntOrNull() ?: return
-        updateAdvancedConfig(_uiState.value.config.copy(suspiciousAttempts = parsed))
+        updateAdvancedConfig(_uiState.value.config.copy(suspiciousAttempts = parsed.coerceAtLeast(2)))
     }
 
     fun setSuspiciousRuleHits(value: String) {
         val parsed = value.toIntOrNull() ?: return
-        updateAdvancedConfig(_uiState.value.config.copy(suspiciousRuleHits = parsed))
+        updateAdvancedConfig(_uiState.value.config.copy(suspiciousRuleHits = parsed.coerceAtLeast(2)))
     }
 
     private fun updateDashboardConfig(updated: PortGuardConfig) {
-        _uiState.value = _uiState.value.copy(config = updated)
+        val normalized = normalizeDetectionWindow(updated)
+        _uiState.value = _uiState.value.copy(config = normalized)
         viewModelScope.launch(Dispatchers.IO) {
-            settingsRepository.updateDashboardConfig(
-                activeProtection = updated.activeProtection,
-                learningMode = updated.learningMode,
-                reactionMode = updated.reactionMode,
-                protectLoopbackOnly = updated.protectLoopbackOnly,
-            )
-            signalSaved("Настройки сохранены")
+            settingsWriteMutex.withLock {
+                val latest = normalizeDetectionWindow(_uiState.value.config)
+                val ok = settingsRepository.updateDashboardConfig(
+                    activeProtection = latest.activeProtection,
+                    learningMode = latest.learningMode,
+                    reactionMode = latest.reactionMode,
+                    protectLoopbackOnly = latest.protectLoopbackOnly,
+                )
+                signalSaved(if (ok) "Настройки сохранены" else "Ошибка сохранения настроек")
+            }
         }
     }
 
     private fun updateTrafficRuntimeConfig(updated: PortGuardConfig) {
         _uiState.value = _uiState.value.copy(config = updated)
         viewModelScope.launch(Dispatchers.IO) {
-            settingsRepository.updateTrafficAndRuntimeConfig(
-                tcp4Enabled = updated.tcp4Enabled,
-                udp4Enabled = updated.udp4Enabled,
-                tcp6Enabled = updated.tcp6Enabled,
-                udp6Enabled = updated.udp6Enabled,
-                userAppsOnly = updated.userAppsOnly,
-                networkRefreshSecs = updated.networkRefreshSecs,
-                activeSelfTestEnabled = updated.activeSelfTestEnabled,
-                selfTestTimeoutMs = updated.selfTestTimeoutMs,
-            )
-            signalSaved("Настройки сохранены")
+            settingsWriteMutex.withLock {
+                val latest = _uiState.value.config
+                val ok = settingsRepository.updateTrafficAndRuntimeConfig(
+                    tcp4Enabled = latest.tcp4Enabled,
+                    udp4Enabled = latest.udp4Enabled,
+                    tcp6Enabled = latest.tcp6Enabled,
+                    udp6Enabled = latest.udp6Enabled,
+                    userAppsOnly = latest.userAppsOnly,
+                    networkRefreshSecs = latest.networkRefreshSecs,
+                    activeSelfTestEnabled = latest.activeSelfTestEnabled,
+                    selfTestTimeoutMs = latest.selfTestTimeoutMs,
+                )
+                signalSaved(if (ok) "Настройки сохранены" else "Ошибка сохранения настроек")
+            }
         }
     }
 
     private fun updateAdvancedConfig(updated: PortGuardConfig) {
-        _uiState.value = _uiState.value.copy(config = updated)
+        val normalized = normalizeDetectionWindow(updated)
+        _uiState.value = _uiState.value.copy(config = normalized)
         viewModelScope.launch(Dispatchers.IO) {
-            settingsRepository.updateAdvancedConfig(
-                suspiciousUniquePorts = updated.suspiciousUniquePorts,
-                suspiciousAttempts = updated.suspiciousAttempts,
-                suspiciousRuleHits = updated.suspiciousRuleHits,
-                scanWindowSecs = updated.scanWindowSecs,
-                warnCooldownSecs = updated.warnCooldownSecs,
-                reactionCooldownSecs = updated.reactionCooldownSecs,
-                loopIntervalMs = updated.loopIntervalMs,
-                reloadCheckSecs = updated.reloadCheckSecs,
-                packageRefreshSecs = updated.packageRefreshSecs,
-                counterRefreshLoops = updated.counterRefreshLoops,
-                resolveProcessDetails = updated.resolveProcessDetails,
-                protectLoopbackOnly = updated.protectLoopbackOnly,
-            )
-            signalSaved("Расширенные настройки сохранены")
+            settingsWriteMutex.withLock {
+                val latest = normalizeDetectionWindow(_uiState.value.config)
+                val ok = settingsRepository.updateAdvancedConfig(
+                    suspiciousUniquePorts = latest.suspiciousUniquePorts,
+                    suspiciousAttempts = latest.suspiciousAttempts,
+                    suspiciousRuleHits = latest.suspiciousRuleHits,
+                    scanWindowSecs = latest.scanWindowSecs,
+                    warnCooldownSecs = latest.warnCooldownSecs,
+                    reactionCooldownSecs = latest.reactionCooldownSecs,
+                    loopIntervalMs = latest.loopIntervalMs,
+                    reloadCheckSecs = latest.reloadCheckSecs,
+                    packageRefreshSecs = latest.packageRefreshSecs,
+                    counterRefreshLoops = latest.counterRefreshLoops,
+                    resolveProcessDetails = latest.resolveProcessDetails,
+                    protectLoopbackOnly = latest.protectLoopbackOnly,
+                )
+                signalSaved(if (ok) "Расширенные настройки сохранены" else "Ошибка сохранения расширенных настроек")
+            }
         }
+    }
+
+    private fun normalizeDetectionWindow(config: PortGuardConfig): PortGuardConfig {
+        val minimum = effectiveCounterRefreshSecs(
+            loopIntervalMs = config.loopIntervalMs,
+            counterRefreshLoops = config.counterRefreshLoops,
+            reactionMode = config.reactionMode,
+        )
+        return if (config.scanWindowSecs >= minimum) config else config.copy(scanWindowSecs = minimum)
     }
 
     fun refresh(full: Boolean = false) {
         viewModelScope.launch(Dispatchers.IO) {
-            if (full) {
-                _uiState.value = _uiState.value.copy(loading = true)
+            refreshMutex.withLock {
+                refreshNow(full)
             }
-            runCatching {
-                if (!settingsPrepared) {
-                    settingsPrepared = settingsRepository.ensureDefaultConfig()
-                }
-                val config = settingsRepository.readConfig() ?: PortGuardConfig()
-                val trustedPackages = settingsRepository.readTrustedPackages()
-                val incidents = stateRepository.readIncidents(limit = 150)
-                val tabLogRaw = rootShell.readText(PortGuardPaths.TAB_LOG)
-                val tabSummary = parseTabLogSummary(tabLogRaw)
-                val runtime = stateRepository.readRuntimeStatus()
-                val installer = runCatching { installerRepository.detectInstaller() }.getOrNull()
-                _uiState.value.copy(
-                    loading = false,
-                    config = config,
-                    trustedPackages = trustedPackages,
-                    portsCount = if (tabSummary.portsCount > 0) tabSummary.portsCount else runtime.protectedPorts,
-                    blockedPorts = if (tabSummary.blockedPorts.isNotEmpty()) tabSummary.blockedPorts else runtime.blockedPorts,
-                    groupedRules = if (tabSummary.groupedRules > 0) tabSummary.groupedRules else runtime.activeRules,
-                    candidateApps = tabSummary.candidateApps,
-                    firewallHealth = tabSummary.firewallHealth,
-                    firewallStatuses = tabSummary.protoStatuses,
-                    selfTestSummary = tabSummary.selfTest,
-                    reapplyReason = tabSummary.reapplyReason,
-                    localSnapshots = tabSummary.localSnapshots,
-                    rootManagerLabel = installer?.type?.label ?: _uiState.value.rootManagerLabel,
-                    incidents = incidents,
-                    detections = aggregateDetections(incidents),
-                )
-            }.onSuccess { state ->
-                _uiState.value = state
-            }.onFailure {
-                _uiState.value = _uiState.value.copy(loading = false)
+        }
+    }
+
+    private suspend fun refreshNow(full: Boolean) {
+        if (full) {
+            _uiState.value = _uiState.value.copy(loading = true)
+        }
+        runCatching {
+            if (!settingsPrepared) {
+                settingsPrepared = settingsRepository.ensureDefaultConfig()
             }
+
+            // Config/trusted lists are comparatively expensive root reads and do
+            // not belong in the live-status polling loop. UI setters already keep
+            // local state synchronized; reread them on initial/manual full refresh.
+            val initial = _uiState.value
+            val refreshedConfig = if (full) {
+                settingsRepository.readConfig() ?: initial.config
+            } else {
+                null
+            }
+            val refreshedTrustedPackages = if (full) {
+                settingsRepository.readTrustedPackages()
+            } else {
+                null
+            }
+            val effectiveConfig = refreshedConfig ?: _uiState.value.config
+            val incidents = stateRepository.readIncidents(limit = 150, stateDir = effectiveConfig.stateDir)
+            val tabLogRaw = rootShell.readText(PortGuardPaths.TAB_LOG)
+            val tabSummary = parseTabLogSummary(tabLogRaw)
+            val runtime = stateRepository.readRuntimeStatus(stateDir = effectiveConfig.stateDir)
+            val installer = if (full) {
+                runCatching { installerRepository.detectInstaller() }.getOrNull()
+            } else {
+                null
+            }
+            val current = _uiState.value
+            current.copy(
+                loading = false,
+                config = refreshedConfig ?: current.config,
+                trustedPackages = refreshedTrustedPackages ?: current.trustedPackages,
+                portsCount = if (tabSummary.portsCount > 0) tabSummary.portsCount else runtime.protectedPorts,
+                blockedPorts = if (tabSummary.blockedPorts.isNotEmpty()) tabSummary.blockedPorts else runtime.blockedPorts,
+                groupedRules = if (tabSummary.groupedRules > 0) tabSummary.groupedRules else runtime.activeRules,
+                candidateApps = tabSummary.candidateApps,
+                firewallHealth = if (!runtime.firewallApplyComplete) {
+                    com.android.portguard.data.FirewallHealth.ERROR
+                } else {
+                    tabSummary.firewallHealth
+                },
+                firewallStatuses = tabSummary.protoStatuses,
+                selfTestSummary = tabSummary.selfTest,
+                reapplyReason = tabSummary.reapplyReason,
+                localSnapshots = tabSummary.localSnapshots,
+                rootManagerLabel = installer?.type?.label ?: current.rootManagerLabel,
+                incidents = incidents,
+                detections = aggregateDetections(incidents),
+            )
+        }.onSuccess { state ->
+            _uiState.value = state
+        }.onFailure {
+            _uiState.value = _uiState.value.copy(loading = false)
         }
     }
 
     private fun startPolling() {
         refreshJob?.cancel()
-        refreshJob = viewModelScope.launch {
-            while (true) {
-                delay(8_000)
-                refresh(full = false)
+        refreshJob = viewModelScope.launch(Dispatchers.IO) {
+            while (isActive) {
+                delay(15_000)
+                refreshMutex.withLock {
+                    refreshNow(full = false)
+                }
             }
         }
     }

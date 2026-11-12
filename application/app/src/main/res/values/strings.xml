@@ -183,9 +183,9 @@
     <string name="advanced_reload_check_title">Проверка обновления настроек</string>
     <string name="advanced_reload_check_desc">Как часто демон перечитывает файлы настроек модуля в секундах. По твоему решению здесь базовое значение 30 секунд.</string>
     <string name="advanced_package_refresh_title">Обновление кэша пакетов</string>
-    <string name="advanced_package_refresh_desc">Как часто обновлять кэш package/uid в секундах. Это влияет на скорость появления новых приложений в логах и исключениях.</string>
+    <string name="advanced_package_refresh_desc">Редкий полный refresh package/uid через PackageManager. Изменение packages.list отслеживается отдельно каждые ~15 секунд, а isolated/SDK UID обновляются через /proc без тяжёлых команд.</string>
     <string name="advanced_counter_refresh_title">Частота чтения счётчиков</string>
-    <string name="advanced_counter_refresh_desc">Через сколько циклов перечитывать счётчики правил. Большее значение уменьшает нагрузку, но замедляет детектор.</string>
+    <string name="advanced_counter_refresh_desc">Базовый множитель для чтения firewall-счётчиков. Для автономности реальный опрос ограничен минимум 30 сек при force-stop и 60 сек в пассивном режиме.</string>
     <string name="advanced_resolve_process_title">Подробности процесса</string>
     <string name="advanced_resolve_process_desc">Включает более глубокое чтение /proc для PID и cmdline владельцев сокетов. Полезно для диагностики, но может сильнее нагружать систему.</string>
     <string name="advanced_loopback_only_desc">Повторяет параметр из панели защиты, но здесь он находится рядом с остальными совместимостями и нагрузкой. Включай его, если нужен более щадящий режим защиты.</string>
@@ -258,14 +258,14 @@
 <string name="maintenance_backup_path">Последняя резервная копия: %1$s</string>
 
 <string name="maintenance_module_actions_title">Сервисные действия модуля</string>
-<string name="maintenance_module_actions_desc">Здесь собраны действия обслуживания: переустановка модуля, экспорт ZIP в Download и отправка команды перезагрузки устройства.</string>
+<string name="maintenance_module_actions_desc">Здесь собраны действия обслуживания: переустановка модуля, экспорт ZIP в /storage/emulated/0/ и отправка команды перезагрузки устройства.</string>
 <string name="maintenance_reinstall_button">Переустановить модуль</string>
 <string name="maintenance_export_module_button">Экспортировать ZIP модуля</string>
 <string name="maintenance_reboot_button">Перезагрузить устройство</string>
 <string name="maintenance_log_title">Лог последних действий</string>
 <string name="maintenance_action_installing">Подготовка переустановки модуля…</string>
 <string name="maintenance_install_success">Команда переустановки модуля выполнена.</string>
-<string name="maintenance_module_zip_exported">ZIP модуля экспортирован в Download.</string>
+<string name="maintenance_module_zip_exported">ZIP модуля сохранён в /storage/emulated/0/PortGuard_module.zip.</string>
 <string name="maintenance_reboot_sent">Команда перезагрузки отправлена.</string>
 
 

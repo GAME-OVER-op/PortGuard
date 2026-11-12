@@ -18,7 +18,7 @@ object PortGuardPaths {
     const val INCIDENTS_JSONL = "$STATE_DIR/incidents.jsonl"
 
     const val TMP_MODULE_ZIP = "/data/local/tmp/portguard_module.zip"
-    const val EXPORTED_MODULE_ZIP = "/sdcard/Download/PortGuard_module.zip"
+    const val EXPORTED_MODULE_ZIP = "/storage/emulated/0/PortGuard_module.zip"
     const val BACKUP_DIR = "/sdcard/Download/PortGuard"
     const val SETTINGS_BACKUP_LATEST_JSON = "$BACKUP_DIR/PortGuard_settings_backup_latest.json"
     const val SETTINGS_BACKUP_TIMESTAMP_PREFIX = "$BACKUP_DIR/PortGuard_settings_backup_"

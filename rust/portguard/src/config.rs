@@ -10,6 +10,9 @@ pub const TRUSTED_UIDS_PATH: &str = "/data/adb/modules/PortGuard/settings/truste
 pub const KILL_EXCEPTIONS_PATH: &str = "/data/adb/modules/PortGuard/settings/kill_exceptions.txt";
 pub const SCAN_IGNORE_PACKAGES_PATH: &str = "/data/adb/modules/PortGuard/settings/scan_ignore_packages.txt";
 
+pub const MIN_COUNTER_REFRESH_SECS: u64 = 30;
+pub const PASSIVE_COUNTER_REFRESH_SECS: u64 = 60;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct Config {
@@ -45,6 +48,10 @@ pub struct Config {
     pub network_refresh_secs: u64,
     pub summary_port_limit: usize,
     pub counter_refresh_loops: u64,
+    pub firewall_reconcile_secs: u64,
+    pub udp_stabilize_secs: u64,
+    pub udp_ephemeral_stabilize_secs: u64,
+    pub udp_grace_secs: u64,
     pub learning_mode: bool,
     pub reaction_mode: String,
 }
@@ -63,15 +70,15 @@ impl Default for Config {
             tcp6_enabled: true,
             udp6_enabled: true,
             resolve_process_details: false,
-            trusted_client_packages: vec!["com.example.portguardui".to_string()],
+            trusted_client_packages: vec!["com.android.portguard".to_string()],
             trusted_client_uids: Vec::new(),
             kill_exceptions_packages: Vec::new(),
             scan_ignore_packages: Vec::new(),
             ignored_owner_packages: Vec::new(),
             suspicious_unique_ports: 2,
-            suspicious_attempts: 2,
-            suspicious_rule_hits: 1,
-            scan_window_secs: 10,
+            suspicious_attempts: 3,
+            suspicious_rule_hits: 3,
+            scan_window_secs: 60,
             warn_cooldown_secs: 15,
             reaction_cooldown_secs: 60,
             max_rules: 100_000,
@@ -80,10 +87,14 @@ impl Default for Config {
             auto_discover_packages: true,
             user_apps_only: true,
             package_uid_sources: vec!["/data/system/packages.list".to_string()],
-            package_refresh_secs: 60,
-            network_refresh_secs: 10,
+            package_refresh_secs: 300,
+            network_refresh_secs: 30,
             summary_port_limit: 24,
-            counter_refresh_loops: 2,
+            counter_refresh_loops: 5,
+            firewall_reconcile_secs: 300,
+            udp_stabilize_secs: 6,
+            udp_ephemeral_stabilize_secs: 45,
+            udp_grace_secs: 12,
             learning_mode: false,
             reaction_mode: "off".to_string(),
         }
@@ -94,27 +105,55 @@ impl Config {
     fn normalize(&mut self) {
         self.reload_check_secs = self.reload_check_secs.max(30);
         self.loop_interval_ms = self.loop_interval_ms.max(500);
-        self.package_refresh_secs = self.package_refresh_secs.max(10);
-        self.network_refresh_secs = self.network_refresh_secs.max(2);
+        self.package_refresh_secs = self.package_refresh_secs.max(120);
+        self.network_refresh_secs = self.network_refresh_secs.max(10);
         self.summary_port_limit = self.summary_port_limit.max(1);
-        self.counter_refresh_loops = self.counter_refresh_loops.max(1);
-        self.scan_window_secs = self.scan_window_secs.max(1);
+        // Counter reads invoke xtables. Keep them deliberately slower than the cheap /proc polling loop.
+        self.counter_refresh_loops = self.counter_refresh_loops.max(5);
+        // Reconciliation is a liveness guard, not part of the hot path.
+        self.firewall_reconcile_secs = self.firewall_reconcile_secs.max(60);
+        self.udp_stabilize_secs = self.udp_stabilize_secs.max(3);
+        self.udp_ephemeral_stabilize_secs = self.udp_ephemeral_stabilize_secs.max(self.udp_stabilize_secs);
+        self.udp_grace_secs = self.udp_grace_secs.max(3);
+        self.suspicious_attempts = self.suspicious_attempts.max(2);
+        self.suspicious_rule_hits = self.suspicious_rule_hits.max(2);
         self.warn_cooldown_secs = self.warn_cooldown_secs.max(1);
         self.reaction_cooldown_secs = self.reaction_cooldown_secs.max(5);
         self.self_test_timeout_ms = self.self_test_timeout_ms.max(250);
         self.reaction_mode = self.reaction_mode.trim().to_ascii_lowercase();
+        if self.reaction_mode != "force_stop" {
+            self.reaction_mode = "off".to_string();
+        }
+        // Detector counters come from xtables and are intentionally sampled much
+        // more slowly than /proc. A scan window shorter than one real sample
+        // interval is misleading because that counter delta can contain activity
+        // accumulated during the whole interval. Keep the configured window at
+        // least as large as the effective counter cadence without increasing the
+        // number of xtables calls.
+        self.scan_window_secs = self
+            .scan_window_secs
+            .max(self.counter_refresh_interval_secs());
         self.active_protection = self.active_protection.trim().to_ascii_lowercase();
         if self.active_protection != "off" {
             self.active_protection = "on".to_string();
-        }
-        if !self.tcp4_enabled && !self.udp4_enabled && !self.tcp6_enabled && !self.udp6_enabled {
-            self.tcp4_enabled = true;
         }
         dedup_sort_strings(&mut self.trusted_client_packages);
         dedup_sort_u32(&mut self.trusted_client_uids);
         dedup_sort_strings(&mut self.kill_exceptions_packages);
         dedup_sort_strings(&mut self.scan_ignore_packages);
         dedup_sort_strings(&mut self.ignored_owner_packages);
+    }
+
+    pub fn counter_refresh_interval_secs(&self) -> u64 {
+        let interval_ms = self
+            .loop_interval_ms
+            .saturating_mul(self.counter_refresh_loops.max(1));
+        let base = (interval_ms.saturating_add(999) / 1000).max(MIN_COUNTER_REFRESH_SECS);
+        if self.reaction_force_stop_enabled() {
+            base
+        } else {
+            base.max(PASSIVE_COUNTER_REFRESH_SECS)
+        }
     }
 
     pub fn reaction_force_stop_enabled(&self) -> bool {

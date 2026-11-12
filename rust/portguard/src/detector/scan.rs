@@ -2,7 +2,7 @@ use crate::{
     config::Config,
     logger,
     reaction,
-    runtime::state::{AttemptEvent, CounterSnapshot, DetectorState},
+    runtime::state::{append_incident, AttemptEvent, CounterSnapshot, DetectorState, IncidentRecord},
     types::{PackageIndex, Proto, RuleCounter},
 };
 use std::collections::{BTreeMap, BTreeSet};
@@ -76,6 +76,10 @@ pub fn process_counters(
 ) {
     let now = now_secs();
     let mut reactions: Vec<(u32, Vec<String>)> = Vec::new();
+    let current_tags = counters
+        .iter()
+        .map(|counter| counter.tag.clone())
+        .collect::<BTreeSet<_>>();
 
     for counter in counters {
         let prev = state
@@ -84,8 +88,20 @@ pub fn process_counters(
             .cloned()
             .unwrap_or_default();
 
-        let delta_packets = counter.packets.saturating_sub(prev.packets);
-        let delta_bytes = counter.bytes.saturating_sub(prev.bytes);
+        // A/B chain replacement resets kernel counters. If the current value is
+        // lower than our stored baseline, treat the current value as activity
+        // since the reset instead of waiting for it to "catch up" to the old one.
+        let reset = counter.packets < prev.packets || counter.bytes < prev.bytes;
+        let delta_packets = if reset {
+            counter.packets
+        } else {
+            counter.packets.saturating_sub(prev.packets)
+        };
+        let delta_bytes = if reset {
+            counter.bytes
+        } else {
+            counter.bytes.saturating_sub(prev.bytes)
+        };
 
         if delta_packets > 0 || delta_bytes > 0 {
             let event = AttemptEvent {
@@ -102,15 +118,22 @@ pub fn process_counters(
                 .or_default()
                 .push(event);
 
+            let target_kind = if counter.dst_ports.len() == 1 {
+                "exact"
+            } else {
+                "grouped/ambiguous"
+            };
             logger::info(
                 "detector",
                 &format!(
-                    "blocked localhost probe: {} proto={} ports=[{}] packets+={} bytes+={}",
+                    "blocked localhost probe: {} proto={} ports=[{}] target_kind={} packets+={} bytes+={} counter_reset={}",
                     uid_label(packages, counter.blocked_uid),
                     counter.proto.short_label(),
                     render_ports(&counter.dst_ports),
+                    target_kind,
                     delta_packets,
-                    delta_bytes
+                    delta_bytes,
+                    reset,
                 ),
             );
         }
@@ -124,7 +147,29 @@ pub fn process_counters(
         );
     }
 
+    // Drop baselines for rules that no longer exist so detector_state.json does
+    // not grow forever after policy/chain churn.
+    state
+        .last_seen_counters
+        .retain(|tag, _| current_tags.contains(tag));
+
     prune_old_events(state, cfg.scan_window_secs, now);
+    state.by_uid.retain(|_, events| !events.is_empty());
+
+    // Cooldown maps are diagnostic/runtime state, not history. Bound their
+    // lifetime so apps that disappeared months ago do not accumulate forever.
+    let cooldown_retention = 86_400_u64.max(
+        cfg.scan_window_secs
+            .max(cfg.warn_cooldown_secs)
+            .max(cfg.reaction_cooldown_secs)
+            .saturating_mul(4),
+    );
+    state
+        .last_warn_epoch
+        .retain(|_, ts| now.saturating_sub(*ts) <= cooldown_retention);
+    state
+        .last_action_epoch
+        .retain(|_, ts| now.saturating_sub(*ts) <= cooldown_retention);
 
     for (uid, events) in &state.by_uid {
         if events.is_empty() {
@@ -143,7 +188,7 @@ pub fn process_counters(
             continue;
         }
 
-        let mut all_ports = BTreeSet::new();
+        let mut potential_ports = BTreeSet::new();
         let mut exact_ports = BTreeSet::new();
         let mut rule_hits = 0_u64;
         let total_attempts: u64 = events.iter().map(|ev| ev.packets.max(1)).sum();
@@ -155,7 +200,7 @@ pub fn process_counters(
                 grouped_hits = grouped_hits.saturating_add(1);
             }
             for port in &ev.dst_ports {
-                all_ports.insert(*port);
+                potential_ports.insert(*port);
             }
             if ev.dst_ports.len() == 1 {
                 if let Some(port) = ev.dst_ports.first() {
@@ -164,9 +209,13 @@ pub fn process_counters(
             }
         }
 
-        let suspicious = all_ports.len() >= cfg.suspicious_unique_ports
-            || total_attempts >= cfg.suspicious_attempts
-            || rule_hits >= cfg.suspicious_rule_hits;
+        // Multiport counters only prove that one port in the group matched. They
+        // must never inflate the unique-port scan threshold. Only one-port rules
+        // contribute exact unique-port evidence.
+        let unique_port_threshold = exact_ports.len() >= cfg.suspicious_unique_ports;
+        let attempts_threshold = total_attempts >= cfg.suspicious_attempts;
+        let rule_hits_threshold = rule_hits >= cfg.suspicious_rule_hits;
+        let suspicious = unique_port_threshold || attempts_threshold || rule_hits_threshold;
 
         if !suspicious {
             continue;
@@ -178,19 +227,21 @@ pub fn process_counters(
             continue;
         }
 
-        let window_ports: Vec<u16> = all_ports.iter().copied().collect();
+        let potential_window_ports: Vec<u16> = potential_ports.iter().copied().collect();
+        let exact_window_ports: Vec<u16> = exact_ports.iter().copied().collect();
         logger::warn(
             "detector",
             &format!(
-                "possible localhost scan detected: {} unique_ports={} exact_ports={} total_attempts={} rule_hits={} grouped_hits={} window={}s ports=[{}] targets={} reaction_mode={}",
+                "possible localhost scan detected: {} exact_unique_ports={} potential_group_ports={} total_attempts={} rule_hits={} grouped_hits={} window={}s exact_ports=[{}] potential_ports=[{}] targets={} reaction_mode={}",
                 uid_label(packages, *uid),
-                all_ports.len(),
                 exact_ports.len(),
+                potential_ports.len(),
                 total_attempts,
                 rule_hits,
                 grouped_hits,
                 cfg.scan_window_secs,
-                render_ports(&window_ports),
+                render_ports(&exact_window_ports),
+                render_ports(&potential_window_ports),
                 render_targets(events),
                 cfg.reaction_mode
             ),
@@ -198,7 +249,7 @@ pub fn process_counters(
         logger::info(
             "detector",
             &format!(
-                "thresholds unique_ports>={} attempts>={} rule_hits>={} current_grouped_hits={}",
+                "thresholds exact_unique_ports>={} attempts>={} rule_hits>={} current_grouped_hits={}",
                 cfg.suspicious_unique_ports,
                 cfg.suspicious_attempts,
                 cfg.suspicious_rule_hits,
@@ -206,8 +257,45 @@ pub fn process_counters(
             ),
         );
         state.last_warn_epoch.insert(warn_key, now);
+        let incident_ports = if exact_window_ports.is_empty() {
+            potential_window_ports.clone()
+        } else {
+            exact_window_ports.clone()
+        };
+        if let Err(err) = append_incident(
+            &cfg.state_dir,
+            &IncidentRecord {
+                timestamp: now,
+                level: "WARN".to_string(),
+                uid: *uid,
+                packages: uid_packages.clone(),
+                ports: incident_ports,
+                action: "warn".to_string(),
+                message: format!(
+                    "possible localhost scan: exact_unique_ports={} attempts={} rule_hits={} grouped_hits={}",
+                    exact_ports.len(), total_attempts, rule_hits, grouped_hits
+                ),
+            },
+        ) {
+            logger::warn("detector", &format!("incident write failed: {err:#}"));
+        }
 
-        reactions.push((*uid, uid_packages));
+        // Destructive reaction requires stronger evidence than a warning. A
+        // single grouped multiport hit can be ambiguous, so it may warn but it
+        // cannot force-stop an app on its own.
+        let reaction_confident = unique_port_threshold
+            || (attempts_threshold && rule_hits >= cfg.suspicious_rule_hits.max(2));
+        if reaction_confident {
+            reactions.push((*uid, uid_packages));
+        } else {
+            logger::info(
+                "detector",
+                &format!(
+                    "reaction suppressed for uid={}: evidence is ambiguous/grouped",
+                    uid
+                ),
+            );
+        }
     }
 
     for (uid, uid_packages) in reactions {
@@ -216,7 +304,8 @@ pub fn process_counters(
             state,
             uid,
             &uid_packages,
-            "localhost scan threshold reached",
+            "localhost scan threshold reached with confirmed evidence",
         );
     }
 }
+

@@ -54,20 +54,29 @@ class RootShell(
         return if (result.isSuccess) result.stdout else null
     }
 
+    suspend fun readTextTail(path: String, lines: Int): String? {
+        val safeLines = lines.coerceIn(1, 10_000)
+        val escaped = shellQuote(path)
+        val result = exec("tail -n $safeLines $escaped")
+        return if (result.isSuccess) result.stdout else null
+    }
+
     suspend fun writeTextAtomic(path: String, content: String): Boolean {
         val parent = path.substringBeforeLast('/', missingDelimiterValue = "")
-        if (parent.isNotBlank()) {
-            mkdirs(parent)
+        if (parent.isNotBlank() && !mkdirs(parent)) {
+            return false
         }
         val tmp = "$path.tmp.${UUID.randomUUID()}"
         val tmpEscaped = shellQuote(tmp)
         val pathEscaped = shellQuote(path)
+        val contentEscaped = shellQuote(content)
         val script = buildString {
-            append("cat > $tmpEscaped <<'__PG_EOF__'\n")
-            append(content)
-            if (!content.endsWith("\n")) append('\n')
-            append("__PG_EOF__\n")
-            append("mv -f $tmpEscaped $pathEscaped\n")
+            // Keep imported/user-controlled text as a single shell argument.
+            // A heredoc delimiter can be injected into content and would turn
+            // the remainder into root shell commands. printf + strict quoting
+            // preserves the bytes without interpreting the payload.
+            append("printf '%s' $contentEscaped > $tmpEscaped && mv -f $tmpEscaped $pathEscaped\n")
+            append("rc=\$?; if [ \"\$rc\" -ne 0 ]; then rm -f $tmpEscaped; fi; (exit \"\$rc\")\n")
         }
         return exec(script).isSuccess
     }
@@ -136,7 +145,7 @@ class RootShell(
 
         private fun runCommandLocked(session: Session, command: String, timeoutMs: Long): RootCommandResult {
             val commandId = commandCounter.incrementAndGet()
-            val markerToken = "__PG_CMD_DONE_${commandId}__:"
+            val markerToken = "__PG_CMD_DONE_${commandId}_${UUID.randomUUID().toString().replace("-", "")}__:"
             val markerPrefixBytes = byteArrayOf(0) + markerToken.toByteArray(StandardCharsets.UTF_8)
             val markerEndByte = 0.toByte()
             val payload = ByteArrayOutputStream()
@@ -147,23 +156,27 @@ class RootShell(
 
             val deadlineNs = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs)
             while (System.nanoTime() < deadlineNs) {
-                drainAvailableOutput(session.stdout, payload)
+                val receivedOutput = drainAvailableOutput(session.stdout, payload)
 
-                val bytes = payload.toByteArray()
-                val markerIndex = bytes.indexOfSubarray(markerPrefixBytes)
-                if (markerIndex >= 0) {
-                    val codeStart = markerIndex + markerPrefixBytes.size
-                    val codeEnd = bytes.indexOfByte(markerEndByte, startIndex = codeStart)
-                    if (codeEnd >= 0) {
-                        val exitCode = bytes.decodeExitCode(start = codeStart, endExclusive = codeEnd)
-                        val stdout = bytes.copyOfRange(0, markerIndex)
-                            .toString(StandardCharsets.UTF_8)
-                            .trimEnd('\n', '\r')
-                        return RootCommandResult(
-                            exitCode = exitCode,
-                            stdout = stdout,
-                            stderr = "",
-                        )
+                // Avoid copying and rescanning the entire accumulated command output
+                // every 10 ms while a root command is still running but silent.
+                if (receivedOutput) {
+                    val bytes = payload.toByteArray()
+                    val markerIndex = bytes.indexOfSubarray(markerPrefixBytes)
+                    if (markerIndex >= 0) {
+                        val codeStart = markerIndex + markerPrefixBytes.size
+                        val codeEnd = bytes.indexOfByte(markerEndByte, startIndex = codeStart)
+                        if (codeEnd >= 0) {
+                            val exitCode = bytes.decodeExitCode(start = codeStart, endExclusive = codeEnd)
+                            val stdout = bytes.copyOfRange(0, markerIndex)
+                                .toString(StandardCharsets.UTF_8)
+                                .trimEnd('\n', '\r')
+                            return RootCommandResult(
+                                exitCode = exitCode,
+                                stdout = stdout,
+                                stderr = "",
+                            )
+                        }
                     }
                 }
 
@@ -204,7 +217,8 @@ class RootShell(
             }
         }
 
-        private fun drainAvailableOutput(input: BufferedInputStream, payload: ByteArrayOutputStream) {
+        private fun drainAvailableOutput(input: BufferedInputStream, payload: ByteArrayOutputStream): Boolean {
+            var received = false
             while (true) {
                 val available = input.available()
                 if (available <= 0) break
@@ -212,7 +226,9 @@ class RootShell(
                 val read = input.read(buffer)
                 if (read <= 0) break
                 payload.write(buffer, 0, read)
+                received = true
             }
+            return received
         }
 
         private fun closeLocked() {

@@ -10,7 +10,7 @@ data class TrafficSettingsUiState(
     val tcp6Enabled: Boolean = true,
     val udp6Enabled: Boolean = true,
     val userAppsOnly: Boolean = true,
-    val networkRefreshSecs: String = "10",
+    val networkRefreshSecs: String = "30",
     val activeSelfTestEnabled: Boolean = true,
     val selfTestTimeoutMs: String = "1500",
     val infoMessage: String? = null,

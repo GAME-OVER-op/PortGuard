@@ -17,6 +17,8 @@ data class PortGuardRuntimeStatus(
     val message: String = "",
     val lastUpdated: String = "",
     val summaryRaw: String = "",
+    val firewallApplyComplete: Boolean = true,
+    val lastApplyError: String = "",
 )
 
 data class PortGuardIncident(
@@ -85,6 +87,16 @@ internal fun parseRuntimeStatus(
         statusJson?.optString("last_updated"),
     ).orEmpty()
 
+    val firewallApplyComplete = when {
+        summaryJson?.has("firewall_apply_complete") == true -> summaryJson.optBoolean("firewall_apply_complete", true)
+        statusJson?.has("firewall_apply_complete") == true -> statusJson.optBoolean("firewall_apply_complete", true)
+        else -> true
+    }
+    val lastApplyError = firstNonBlank(
+        summaryJson?.optString("last_apply_error"),
+        statusJson?.optString("last_apply_error"),
+    ).orEmpty()
+
     val trimmedSummary = summaryRaw.orEmpty().trim().take(1400)
 
     return PortGuardRuntimeStatus(
@@ -101,6 +113,8 @@ internal fun parseRuntimeStatus(
         message = message,
         lastUpdated = lastUpdated,
         summaryRaw = trimmedSummary,
+        firewallApplyComplete = firewallApplyComplete,
+        lastApplyError = lastApplyError,
     )
 }
 

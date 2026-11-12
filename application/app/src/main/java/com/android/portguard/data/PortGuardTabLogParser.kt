@@ -42,8 +42,7 @@ data class TabLogSummary(
             val bad = protoStatuses.count { it.status in badStates }
             if (good == 0 && waiting == protoStatuses.size) return FirewallHealth.WAITING
             return when {
-                good == protoStatuses.size -> FirewallHealth.GOOD
-                good > 0 && bad == 0 -> FirewallHealth.PARTIAL
+                bad == 0 && good > 0 && good + waiting == protoStatuses.size -> FirewallHealth.GOOD
                 good > 0 -> FirewallHealth.PARTIAL
                 bad > 0 -> FirewallHealth.ERROR
                 else -> FirewallHealth.WAITING
@@ -83,7 +82,15 @@ fun parseTabLogSummary(raw: String?): TabLogSummary {
 
 private fun parsePorts(raw: String): List<Int> {
     if (raw.isBlank() || raw.equals("[none]", true) || raw.equals("none", true)) return emptyList()
-    return Regex("\\d+").findAll(raw).mapNotNull { it.value.toIntOrNull() }.toList()
+    // The daemon may render a truncated summary as "1,2,... +18 more".
+    // Digits after the ellipsis are a count, not a port number.
+    val explicitPorts = raw.substringBefore("...")
+    return Regex("\\d+")
+        .findAll(explicitPorts)
+        .mapNotNull { it.value.toIntOrNull() }
+        .filter { it in 1..65535 }
+        .distinct()
+        .toList()
 }
 
 private fun parseProtoStatuses(raw: String): List<FirewallProtoStatus> {

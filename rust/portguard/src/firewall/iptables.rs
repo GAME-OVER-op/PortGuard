@@ -158,6 +158,13 @@ pub struct ApplyReport {
     pub backend: String,
     pub applied_rules: Vec<AppliedRule>,
     pub capabilities: Vec<FirewallProtoCapability>,
+    pub failures: Vec<String>,
+}
+
+impl ApplyReport {
+    pub fn is_complete(&self) -> bool {
+        self.failures.is_empty()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -396,7 +403,7 @@ fn hook_variants(proto: Proto, chain: &str, local_mode: &LocalMatchMode, local_a
         .collect()
 }
 
-fn parse_output_rules_for_chain(proto: Proto, chain: &str) -> Result<Vec<Vec<String>>> {
+fn read_output_rules_text(proto: Proto) -> Result<String> {
     let binary = resolve_xtables_binary(proto);
     let (rc, text) = xtables(&binary, &["-S", "OUTPUT"])?;
     if rc != 0 {
@@ -406,7 +413,10 @@ fn parse_output_rules_for_chain(proto: Proto, chain: &str) -> Result<Vec<Vec<Str
             summarize_shell_text(text.trim())
         );
     }
+    Ok(text)
+}
 
+fn parse_output_rules_for_chain_from_text(text: &str, chain: &str) -> Vec<Vec<String>> {
     let mut out = Vec::new();
     for line in text.lines() {
         let trimmed = line.trim();
@@ -425,14 +435,20 @@ fn parse_output_rules_for_chain(proto: Proto, chain: &str) -> Result<Vec<Vec<Str
             out.push(tokens);
         }
     }
-    Ok(out)
+    out
+}
+
+fn parse_output_rules_for_chain(proto: Proto, chain: &str) -> Result<Vec<Vec<String>>> {
+    let text = read_output_rules_text(proto)?;
+    Ok(parse_output_rules_for_chain_from_text(&text, chain))
 }
 
 fn active_slot(proto: Proto, base_chain: &str) -> Result<Option<ChainSlot>> {
     let a_chain = managed_chain_name(base_chain, proto, ChainSlot::A);
     let b_chain = managed_chain_name(base_chain, proto, ChainSlot::B);
-    let a_rules = parse_output_rules_for_chain(proto, &a_chain)?;
-    let b_rules = parse_output_rules_for_chain(proto, &b_chain)?;
+    let output_rules = read_output_rules_text(proto)?;
+    let a_rules = parse_output_rules_for_chain_from_text(&output_rules, &a_chain);
+    let b_rules = parse_output_rules_for_chain_from_text(&output_rules, &b_chain);
 
     if !b_rules.is_empty() {
         return Ok(Some(ChainSlot::B));
@@ -459,15 +475,28 @@ fn remove_all_hooks_to_chain(proto: Proto, chain: &str) -> Result<()> {
     let binary = resolve_xtables_binary(proto);
     loop {
         let matches = parse_output_rules_for_chain(proto, chain)?;
-        let Some(rule) = matches.into_iter().next() else {
-            break;
-        };
-        let mut args = vec!["-D".to_string(), "OUTPUT".to_string()];
-        args.extend(rule);
-        let (rc, _) = xtablesv(&binary, &args)?;
-        if rc != 0 {
+        if matches.is_empty() {
             break;
         }
+
+        // Delete the whole snapshot before reading OUTPUT again. Local-address
+        // backends can install several equivalent hooks; rereading after every
+        // single deletion multiplied expensive xtables calls during an apply.
+        for rule in matches {
+            let mut args = vec!["-D".to_string(), "OUTPUT".to_string()];
+            args.extend(rule);
+            let (rc, out) = xtablesv(&binary, &args)?;
+            if rc != 0 {
+                anyhow::bail!(
+                    "{} failed to remove OUTPUT hook to {}: {}",
+                    binary,
+                    chain,
+                    summarize_shell_text(out.trim())
+                );
+            }
+        }
+        // One more pass handles a rare concurrent hook insertion and verifies
+        // that the managed chain is really detached.
     }
     Ok(())
 }
@@ -496,9 +525,40 @@ fn ensure_hooks(proto: Proto, chain: &str, selected: &SelectedBackend) -> Result
 
 fn clear_single_chain(proto: Proto, chain: &str) -> Result<()> {
     let binary = resolve_xtables_binary(proto);
-    let _ = remove_all_hooks_to_chain(proto, chain);
-    let _ = xtables(&binary, &["-F", chain]);
-    let _ = xtables(&binary, &["-X", chain]);
+    remove_all_hooks_to_chain(proto, chain)?;
+
+    // A missing chain is already the desired end state. Distinguish it from a
+    // command execution failure (which `xtables` returns as Err above).
+    let (list_rc, _) = xtables(&binary, &["-L", chain])?;
+    if list_rc != 0 {
+        return Ok(());
+    }
+
+    let (flush_rc, flush_out) = xtables(&binary, &["-F", chain])?;
+    if flush_rc != 0 {
+        anyhow::bail!(
+            "{} -F {} failed: {}",
+            binary,
+            chain,
+            summarize_shell_text(flush_out.trim())
+        );
+    }
+    let (delete_rc, delete_out) = xtables(&binary, &["-X", chain])?;
+    if delete_rc != 0 {
+        anyhow::bail!(
+            "{} -X {} failed: {}",
+            binary,
+            chain,
+            summarize_shell_text(delete_out.trim())
+        );
+    }
+    Ok(())
+}
+
+fn clear_proto_chains(base_chain: &str, proto: Proto) -> Result<()> {
+    clear_single_chain(proto, &legacy_chain_name(base_chain, proto))?;
+    clear_single_chain(proto, &managed_chain_name(base_chain, proto, ChainSlot::A))?;
+    clear_single_chain(proto, &managed_chain_name(base_chain, proto, ChainSlot::B))?;
     Ok(())
 }
 
@@ -511,9 +571,7 @@ fn clear_probe_chain(proto: Proto, chain: &str) {
 
 pub fn clear_chain(base_chain: &str) -> Result<()> {
     for proto in Proto::ALL {
-        let _ = clear_single_chain(proto, &legacy_chain_name(base_chain, proto));
-        clear_single_chain(proto, &managed_chain_name(base_chain, proto, ChainSlot::A))?;
-        clear_single_chain(proto, &managed_chain_name(base_chain, proto, ChainSlot::B))?;
+        clear_proto_chains(base_chain, proto)?;
     }
     Ok(())
 }
@@ -688,7 +746,23 @@ fn ensure_probe_chain(proto: Proto, chain_name: &str) -> Result<()> {
     Ok(())
 }
 
-fn run_probe_rule(proto: Proto, chain_name: &str, args: &[String], label: &str) -> Result<()> {
+fn delete_args_for_inserted_rule(insert_args: &[String]) -> Result<Vec<String>> {
+    if insert_args.len() < 3 || insert_args[0] != "-I" {
+        anyhow::bail!("cannot derive exact delete rule from malformed insert arguments");
+    }
+
+    let mut delete_args = insert_args.to_vec();
+    delete_args[0] = "-D".to_string();
+    // PortGuard always inserts probe/self-test rules at position 1.  The
+    // position is not part of an exact -D rule specification and retaining it
+    // would make cleanup depend on rule ordering.
+    if delete_args.get(2).map(String::as_str) == Some("1") {
+        delete_args.remove(2);
+    }
+    Ok(delete_args)
+}
+
+fn run_probe_rule(proto: Proto, _chain_name: &str, args: &[String], label: &str) -> Result<()> {
     let binary = resolve_xtables_binary(proto);
     let (rc, out) = xtablesv(&binary, args)?;
     if rc != 0 {
@@ -700,7 +774,8 @@ fn run_probe_rule(proto: Proto, chain_name: &str, args: &[String], label: &str) 
         );
     }
 
-    let (rc, out) = xtables(&binary, &["-D", chain_name, "1"])?;
+    let delete_args = delete_args_for_inserted_rule(args)?;
+    let (rc, out) = xtablesv(&binary, &delete_args)?;
     if rc != 0 {
         anyhow::bail!(
             "{} {} cleanup failed: {}",
@@ -972,7 +1047,11 @@ fn apply_rules_with_mode(
         selected.mode.ports,
     );
 
-    let _ = remove_all_hooks_to_chain(proto, &target_chain);
+    // The inactive A/B slot must be completely detached before it is flushed
+    // and rebuilt. Silently ignoring a failed detach can mutate a chain that is
+    // still live in OUTPUT, creating a short protection gap or mixed policy.
+    remove_all_hooks_to_chain(proto, &target_chain)
+        .with_context(|| format!("detach target chain {} before rebuild", target_chain))?;
     ensure_chain_exists(proto, &target_chain)?;
     let (rc, out) = xtables(&binary, &["-F", &target_chain])?;
     if rc != 0 {
@@ -993,11 +1072,15 @@ fn apply_rules_with_mode(
         return Err(err);
     }
 
-    let _ = remove_all_hooks_to_chain(proto, &legacy_chain);
-    let _ = clear_single_chain(proto, &legacy_chain);
-    let _ = remove_all_hooks_to_chain(proto, &stale_chain);
+    // Once the new slot is hooked, cleanup of every old slot is part of a
+    // successful transaction. If it fails, report the apply as degraded so the
+    // daemon retries instead of claiming success while an old DROP chain remains
+    // active in parallel. Keep the new hook in place to avoid a protection gap.
+    clear_single_chain(proto, &legacy_chain)
+        .with_context(|| format!("cleanup legacy chain {} after switch", legacy_chain))?;
     if stale_chain != target_chain {
-        let _ = clear_single_chain(proto, &stale_chain);
+        clear_single_chain(proto, &stale_chain)
+            .with_context(|| format!("cleanup stale chain {} after switch", stale_chain))?;
     }
 
     Ok(ProtoApplyReport {
@@ -1008,11 +1091,270 @@ fn apply_rules_with_mode(
     })
 }
 
+
+fn selected_backend_from_capability(capability: &FirewallProtoCapability) -> Option<SelectedBackend> {
+    if !capability.supported || capability.selected_backend.is_empty() {
+        return None;
+    }
+
+    let text = capability.selected_backend.as_str();
+    let local = if text.contains("local=local-ip-list(") {
+        LocalMatchMode::DestLocalAddressList
+    } else if text.contains("local=-o lo -d ") {
+        LocalMatchMode::LoAndDestLoopback
+    } else if text.contains("local=-o lo") {
+        LocalMatchMode::LoopbackIface
+    } else if text.contains("local=dst-type LOCAL") {
+        LocalMatchMode::DstTypeLocal
+    } else if text.contains("local=-d ") {
+        LocalMatchMode::DestLoopback
+    } else {
+        return None;
+    };
+
+    let ports = if text.contains("ports=multiport") {
+        PortMatchMode::Multiport
+    } else if text.contains("ports=per-port") {
+        PortMatchMode::PerPort
+    } else {
+        return None;
+    };
+
+    let local_addresses = match &local {
+        LocalMatchMode::DestLocalAddressList => collect_local_addresses(capability.proto),
+        _ => Vec::new(),
+    };
+
+    Some(SelectedBackend {
+        mode: BackendMode { local, ports },
+        use_socket_exists: text.contains(" socket-exists"),
+        local_addresses,
+    })
+}
+
+/// Re-apply a changed policy with a backend that was already successfully probed.
+/// This intentionally skips the expensive probe chain dance. If a cached backend
+/// stopped working, the caller should fall back to `apply_rules()` once.
+pub fn apply_rules_cached(
+    base_chain: &str,
+    desired_rules: &[DesiredRule],
+    previous_desired_rules: &[DesiredRule],
+    previous_applied_rules: &[AppliedRule],
+    cached_capabilities: &[FirewallProtoCapability],
+    force_reapply_all: bool,
+) -> Result<ApplyReport> {
+    let mut total_rules = 0_usize;
+    let mut applied_rules = Vec::new();
+    let mut backend_parts = Vec::new();
+    let mut capabilities = Vec::new();
+
+    for proto in Proto::ALL {
+        let proto_rules = desired_rules
+            .iter()
+            .filter(|rule| rule.proto == proto)
+            .cloned()
+            .collect::<Vec<_>>();
+        let previous_proto_rules = previous_desired_rules
+            .iter()
+            .filter(|rule| rule.proto == proto)
+            .cloned()
+            .collect::<Vec<_>>();
+        let rules_requested = proto_rules.len();
+
+        let mut capability = cached_capabilities
+            .iter()
+            .find(|cap| cap.proto == proto)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("cached capability missing for {}", proto.short_label()))?;
+
+        // The normal hot case is one listener/protocol changing. Keep every
+        // unaffected A/B chain untouched so we do not reset its counters or run
+        // needless xtables commands. Recovery paths explicitly force all protos.
+        if !force_reapply_all && proto_rules == previous_proto_rules {
+            let kept_rules = previous_applied_rules
+                .iter()
+                .filter(|rule| rule.proto == proto)
+                .cloned()
+                .collect::<Vec<_>>();
+            capability.rules_requested = rules_requested;
+            capability.enabled_in_config = rules_requested > 0;
+            capability.applied_rule_count = kept_rules.len();
+            total_rules = total_rules.saturating_add(kept_rules.len());
+            if proto_rules.is_empty() {
+                backend_parts.push(format!(
+                    "{}[idle:{}]",
+                    proto.short_label(),
+                    capability.selected_backend.as_str()
+                ));
+            } else {
+                backend_parts.push(format!(
+                    "{}[{}]",
+                    proto.short_label(),
+                    capability.selected_backend.as_str()
+                ));
+            }
+            applied_rules.extend(kept_rules);
+            capabilities.push(capability);
+            continue;
+        }
+
+        capability.rules_requested = rules_requested;
+        capability.enabled_in_config = rules_requested > 0;
+        capability.applied_rule_count = 0;
+        capability.last_error.clear();
+
+        if proto_rules.is_empty() {
+            clear_proto_chains(base_chain, proto)
+                .with_context(|| format!("cached idle-chain cleanup failed for {}", proto.short_label()))?;
+            backend_parts.push(format!("{}[idle:{}]", proto.short_label(), capability.selected_backend.as_str()));
+            capabilities.push(capability);
+            continue;
+        }
+
+        let selected = selected_backend_from_capability(&capability)
+            .ok_or_else(|| anyhow::anyhow!("cached backend unusable for {}: {}", proto.short_label(), capability.selected_backend))?;
+
+        let report = apply_rules_with_mode(base_chain, &proto_rules, proto, selected)
+            .with_context(|| format!("cached backend apply failed for {}", proto.short_label()))?;
+
+        total_rules = total_rules.saturating_add(report.actual_rule_count);
+        capability.applied_rule_count = report.actual_rule_count;
+        capability.supported = true;
+        capability.selected_backend = report.backend.clone();
+        capability.chain_name = report.chain_name.clone();
+        backend_parts.push(format!("{}[{}]", proto.short_label(), report.backend));
+        applied_rules.extend(report.applied_rules);
+        capabilities.push(capability);
+    }
+
+    Ok(ApplyReport {
+        actual_rule_count: total_rules,
+        backend: backend_parts.join("; "),
+        applied_rules,
+        capabilities,
+        failures: Vec::new(),
+    })
+}
+
+/// Cheap periodic liveness check. No probes and no rule modifications are made.
+/// It verifies that every managed chain is still hooked from OUTPUT and that the
+/// expected PortGuard rule comments still exist in the active chain.
+pub fn verify_applied_rules(base_chain: &str, applied_rules: &[AppliedRule]) -> Result<()> {
+    let mut by_chain: BTreeMap<(Proto, String), Vec<&AppliedRule>> = BTreeMap::new();
+    for rule in applied_rules {
+        by_chain
+            .entry((rule.proto, rule.chain_name.clone()))
+            .or_default()
+            .push(rule);
+    }
+
+    // Verify the OUTPUT topology first. Presence of the expected chain alone is
+    // insufficient: a stale legacy/A/B hook left by an older or interrupted
+    // apply would enforce a second policy in parallel. This also catches stale
+    // hooks when the current desired policy is completely empty. Read OUTPUT only
+    // once per address family; TCP/UDP share the same xtables table. If a family
+    // has no recorded rules and its xtables binary is unavailable, skip that
+    // family instead of turning an unsupported IPv6/IPv4 stack into a permanent
+    // reconciliation failure.
+    let has_expected_v4 = applied_rules.iter().any(|rule| !rule.proto.is_ipv6());
+    let has_expected_v6 = applied_rules.iter().any(|rule| rule.proto.is_ipv6());
+    let output_v4 = match read_output_rules_text(Proto::Tcp4) {
+        Ok(text) => Some(text),
+        Err(err) if has_expected_v4 => return Err(err),
+        Err(_) => None,
+    };
+    let output_v6 = match read_output_rules_text(Proto::Tcp6) {
+        Ok(text) => Some(text),
+        Err(err) if has_expected_v6 => return Err(err),
+        Err(_) => None,
+    };
+
+    for proto in Proto::ALL {
+        let output_rules = if proto.is_ipv6() {
+            output_v6.as_deref()
+        } else {
+            output_v4.as_deref()
+        };
+        let Some(output_rules) = output_rules else {
+            continue;
+        };
+        let expected_chains = applied_rules
+            .iter()
+            .filter(|rule| rule.proto == proto)
+            .map(|rule| rule.chain_name.as_str())
+            .collect::<BTreeSet<_>>();
+        if expected_chains.len() > 1 {
+            anyhow::bail!(
+                "multiple active managed chains recorded for {}: {:?}",
+                proto.short_label(),
+                expected_chains
+            );
+        }
+        let expected_chain = expected_chains.iter().next().copied();
+        let managed = [
+            legacy_chain_name(base_chain, proto),
+            managed_chain_name(base_chain, proto, ChainSlot::A),
+            managed_chain_name(base_chain, proto, ChainSlot::B),
+        ];
+        for chain_name in managed {
+            let hooks = parse_output_rules_for_chain_from_text(output_rules, &chain_name);
+            if expected_chain == Some(chain_name.as_str()) {
+                if hooks.is_empty() {
+                    anyhow::bail!("missing OUTPUT hook for {}", chain_name);
+                }
+            } else if !hooks.is_empty() {
+                anyhow::bail!(
+                    "unexpected stale OUTPUT hook for {} while expected={}",
+                    chain_name,
+                    expected_chain.unwrap_or("none")
+                );
+            }
+        }
+    }
+
+    for ((proto, chain_name), rules) in by_chain {
+        let binary = resolve_xtables_binary(proto);
+        let (rc, text) = xtables(&binary, &["-S", &chain_name])
+            .with_context(|| format!("verify chain {}", chain_name))?;
+        if rc != 0 {
+            anyhow::bail!(
+                "{} -S {} failed: {}",
+                binary,
+                chain_name,
+                summarize_shell_text(text.trim())
+            );
+        }
+
+        let actual_count = text
+            .lines()
+            .filter(|line| line.trim_start().starts_with(&format!("-A {} ", chain_name)))
+            .count();
+        if actual_count != rules.len() {
+            anyhow::bail!(
+                "chain {} rule count mismatch expected={} actual={}",
+                chain_name,
+                rules.len(),
+                actual_count
+            );
+        }
+
+        for rule in rules {
+            let comment = render_comment(rule);
+            if !text.contains(&comment) {
+                anyhow::bail!("chain {} missing expected rule {}", chain_name, comment);
+            }
+        }
+    }
+
+    Ok(())
+}
+
 pub fn apply_rules(base_chain: &str, desired_rules: &[DesiredRule]) -> Result<ApplyReport> {
     let mut total_rules = 0_usize;
     let mut applied_rules = Vec::new();
     let mut backend_parts = Vec::new();
     let mut capabilities = Vec::new();
+    let mut failures = Vec::new();
     let mut family_cache: BTreeMap<bool, FamilyProbeCapability> = BTreeMap::new();
 
     for proto in Proto::ALL {
@@ -1032,20 +1374,28 @@ pub fn apply_rules(base_chain: &str, desired_rules: &[DesiredRule]) -> Result<Ap
             probe_proto_capability(base_chain, proto, enabled_in_config, rules_requested, &family_probe);
 
         if proto_rules.is_empty() {
-            let _ = clear_single_chain(proto, &legacy_chain_name(base_chain, proto));
-            let _ = clear_single_chain(proto, &managed_chain_name(base_chain, proto, ChainSlot::A));
-            let _ = clear_single_chain(proto, &managed_chain_name(base_chain, proto, ChainSlot::B));
-            if capability.supported {
+            if let Err(err) = clear_proto_chains(base_chain, proto) {
+                capability.supported = false;
+                capability.last_error = format!("idle cleanup failed: {err:#}");
+                failures.push(format!("{}: {}", proto.short_label(), capability.last_error));
+                backend_parts.push(format!(
+                    "{}[idle-cleanup-failed:{}]",
+                    proto.short_label(),
+                    summarize_shell_text(&capability.last_error)
+                ));
+            } else if capability.supported {
                 backend_parts.push(format!(
                     "{}[idle:{}]",
                     proto.short_label(),
                     capability.selected_backend
                 ));
             } else if capability.last_error.is_empty() {
-                backend_parts.push(format!("{}[idle-unsupported]", proto.short_label()));
+                // No rules are requested, so lack of backend support is not a
+                // protection failure once managed chains are confirmed absent.
+                backend_parts.push(format!("{}[idle]", proto.short_label()));
             } else {
                 backend_parts.push(format!(
-                    "{}[idle-unsupported:{}]",
+                    "{}[idle:{}]",
                     proto.short_label(),
                     summarize_shell_text(&capability.last_error)
                 ));
@@ -1067,6 +1417,9 @@ pub fn apply_rules(base_chain: &str, desired_rules: &[DesiredRule]) -> Result<Ap
                 }
                 Err(err) => {
                     capability.last_error = format!("apply failed: {err:#}");
+                    capability.supported = false;
+                    capability.applied_rule_count = 0;
+                    failures.push(format!("{}: {}", proto.short_label(), capability.last_error));
                     backend_parts.push(format!(
                         "{}[apply-failed:{}]",
                         proto.short_label(),
@@ -1088,6 +1441,9 @@ pub fn apply_rules(base_chain: &str, desired_rules: &[DesiredRule]) -> Result<Ap
             } else {
                 capability.last_error.clone()
             };
+            capability.supported = false;
+            capability.applied_rule_count = 0;
+            failures.push(format!("{}: {}", proto.short_label(), reason));
             backend_parts.push(format!(
                 "{}[unsupported:{}]",
                 proto.short_label(),
@@ -1112,6 +1468,7 @@ pub fn apply_rules(base_chain: &str, desired_rules: &[DesiredRule]) -> Result<Ap
         backend: backend_parts.join("; "),
         applied_rules,
         capabilities,
+        failures,
     })
 }
 
@@ -1350,11 +1707,47 @@ fn run_active_self_test_for_capability(
         }
     }
 
-    let _ = xtables(&capability.xtables_binary, &["-D", &capability.chain_name, "1"]);
+    let cleanup_args = match delete_args_for_inserted_rule(&args) {
+        Ok(args) => args,
+        Err(err) => {
+            result.error = format!("self-test cleanup preparation failed: {err:#}");
+            capability.active_self_test_ok = false;
+            capability.active_self_test_error = result.error.clone();
+            return result;
+        }
+    };
+    match xtablesv(&capability.xtables_binary, &cleanup_args) {
+        Ok((0, _)) => {}
+        Ok((_rc, out)) => {
+            let cleanup_error = format!(
+                "self-test cleanup failed: {}",
+                summarize_shell_text(out.trim())
+            );
+            if result.error.is_empty() {
+                result.error = cleanup_error.clone();
+            } else {
+                result.error = format!("{}; {}", result.error, cleanup_error);
+            }
+            capability.active_self_test_ok = false;
+            capability.active_self_test_error = result.error.clone();
+            return result;
+        }
+        Err(err) => {
+            let cleanup_error = format!("self-test cleanup failed: {err:#}");
+            if result.error.is_empty() {
+                result.error = cleanup_error.clone();
+            } else {
+                result.error = format!("{}; {}", result.error, cleanup_error);
+            }
+            capability.active_self_test_ok = false;
+            capability.active_self_test_error = result.error.clone();
+            return result;
+        }
+    }
 
     let packet_delta = result.packets_after.saturating_sub(result.packets_before);
     capability.active_self_test_packets = packet_delta;
-    if packet_delta > 0 {
+    if packet_delta > 0 && result.error.is_empty() {
         result.ok = true;
         capability.active_self_test_ok = true;
         capability.active_self_test_error.clear();

@@ -97,6 +97,9 @@ class InstallerFlowViewModel(app: Application) : AndroidViewModel(app) {
             installing = true,
             installSuccess = false,
             installError = null,
+            showSaveFallbackPrompt = false,
+            savingFallbackZip = false,
+            fallbackSavedPath = null,
             installProgress = 6,
             installPhase = "Подготавливаем установку",
             installLog = "Подготовка установки модуля…",
@@ -122,6 +125,46 @@ class InstallerFlowViewModel(app: Application) : AndroidViewModel(app) {
                 statusMessage = if (result.success) "Установка завершена. Для применения модуля требуется перезагрузка устройства." else "Установка завершилась с ошибкой.",
                 step = InstallerStep.INSTALL,
                 stagedUpdateFound = base.stagedUpdateFound || result.requiresReboot,
+                showSaveFallbackPrompt = !result.success && installer.assetPresent,
+                savingFallbackZip = false,
+                fallbackSavedPath = null,
+            )
+        }
+    }
+
+
+    fun dismissSaveFallbackPrompt() {
+        _uiState.value = _uiState.value.copy(showSaveFallbackPrompt = false)
+    }
+
+    fun saveModuleZipFallback() {
+        val current = _uiState.value
+        if (current.installing || current.savingFallbackZip || current.rebooting || !current.assetPresent) return
+
+        _uiState.value = current.copy(
+            showSaveFallbackPrompt = false,
+            savingFallbackZip = true,
+            fallbackSavedPath = null,
+            installPhase = "Сохраняем архив модуля",
+            statusMessage = "Сохраняем ZIP в /storage/emulated/0/…",
+        )
+
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = installerRepository.exportModuleZipToInternalStorage()
+            val previousLog = _uiState.value.installLog
+            _uiState.value = _uiState.value.copy(
+                savingFallbackZip = false,
+                fallbackSavedPath = result.exportedPath,
+                installLog = listOf(previousLog, result.log)
+                    .filter { it.isNotBlank() }
+                    .joinToString("\n\n"),
+                installPhase = if (result.success) "ZIP модуля сохранён" else "Не удалось сохранить ZIP модуля",
+                statusMessage = if (result.success) {
+                    "ZIP сохранён в ${result.exportedPath}. Его можно установить вручную через root-менеджер."
+                } else {
+                    "Не удалось сохранить ZIP модуля в /storage/emulated/0/."
+                },
+                installError = if (result.success) _uiState.value.installError else result.log,
             )
         }
     }
@@ -129,7 +172,7 @@ class InstallerFlowViewModel(app: Application) : AndroidViewModel(app) {
 
     fun onSystemBack() {
         val current = _uiState.value
-        if (current.startupLoading || current.loading || current.installing || current.rebooting) return
+        if (current.startupLoading || current.loading || current.installing || current.savingFallbackZip || current.rebooting) return
 
         when (current.step) {
             InstallerStep.WELCOME -> Unit

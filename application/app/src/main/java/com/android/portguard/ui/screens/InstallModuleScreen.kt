@@ -29,6 +29,7 @@ import androidx.compose.material.icons.rounded.Article
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.InstallMobile
 import androidx.compose.material.icons.rounded.RestartAlt
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -38,6 +39,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
@@ -58,8 +60,10 @@ fun InstallModuleScreen(
     state: InstallerFlowUiState,
     onInstall: () -> Unit,
     onReboot: () -> Unit,
+    onSaveFallback: () -> Unit,
+    onDismissSaveFallback: () -> Unit,
 ) {
-    val installEnabled = state.rootGranted && state.assetPresent && !state.installing && !state.rebooting && state.installerType != ModuleInstallerType.MANUAL
+    val installEnabled = state.rootGranted && state.assetPresent && !state.installing && !state.savingFallbackZip && !state.rebooting && state.installerType != ModuleInstallerType.MANUAL
     val animatedProgress by animateFloatAsState(
         targetValue = (state.installProgress.coerceIn(0, 100) / 100f),
         animationSpec = androidx.compose.animation.core.tween(durationMillis = 550, easing = FastOutSlowInEasing),
@@ -69,6 +73,29 @@ fun InstallModuleScreen(
     val hasLogs = state.installLog.isNotBlank() || state.installError != null
     LaunchedEffect(hasLogs) {
         if (!hasLogs) showLogs = false
+    }
+
+    if (state.showSaveFallbackPrompt) {
+        AlertDialog(
+            onDismissRequest = onDismissSaveFallback,
+            title = { Text("Автоматическая установка не удалась") },
+            text = {
+                Text(
+                    "Сохранить ZIP модуля во внутреннюю память для ручной установки?\n\n" +
+                        "/storage/emulated/0/PortGuard_module.zip"
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = onSaveFallback) {
+                    Text("Сохранить")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = onDismissSaveFallback) {
+                    Text("Отмена")
+                }
+            },
+        )
     }
 
     Box(
@@ -146,7 +173,7 @@ fun InstallModuleScreen(
                             textAlign = TextAlign.Center,
                         )
                     }
-                    if (state.installError != null && !state.installing) {
+                    if (state.installError != null && !state.installing && !state.savingFallbackZip) {
                         Text(
                             text = state.installError,
                             color = MaterialTheme.colorScheme.error,
@@ -158,7 +185,7 @@ fun InstallModuleScreen(
             }
 
             AnimatedVisibility(
-                visible = state.installing || state.installSuccess || state.installError != null,
+                visible = state.installing || state.savingFallbackZip || state.installSuccess || state.installError != null || state.fallbackSavedPath != null,
                 enter = fadeIn() + expandVertically(),
                 exit = fadeOut() + shrinkVertically(),
             ) {
@@ -176,7 +203,7 @@ fun InstallModuleScreen(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
-                            if (state.installing) {
+                            if (state.installing || state.savingFallbackZip) {
                                 CircularProgressIndicator(
                                     modifier = Modifier.size(18.dp),
                                     strokeWidth = 2.dp,
@@ -197,7 +224,7 @@ fun InstallModuleScreen(
                             )
                         }
                         Text(
-                            text = if (state.installing) "${state.installProgress}%" else if (state.installSuccess) "100%" else state.statusMessage,
+                            text = if (state.installing) "${state.installProgress}%" else state.statusMessage,
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             textAlign = TextAlign.Center,
@@ -223,13 +250,13 @@ fun InstallModuleScreen(
                     modifier = Modifier.fillMaxWidth(),
                     enabled = installEnabled,
                 ) {
-                    if (state.installing) {
+                    if (state.installing || state.savingFallbackZip) {
                         Row(
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                            Text("Устанавливаем… ${state.installProgress}%")
+                            Text(if (state.savingFallbackZip) "Сохраняем ZIP…" else "Устанавливаем… ${state.installProgress}%")
                         }
                     } else {
                         Text(if (state.updateAvailable) "Обновить модуль" else "Установить")

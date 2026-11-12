@@ -78,6 +78,13 @@ pub fn find_processes_by_inodes(inodes: &BTreeSet<u64>) -> Result<BTreeMap<u64, 
                     process_name: read_cmdline(pid),
                 },
             );
+
+            // Process-detail resolution is optional diagnostic work. Once every
+            // requested socket inode has been resolved there is no value in
+            // walking the rest of /proc/*/fd.
+            if out.len() == inodes.len() {
+                return Ok(out);
+            }
         }
     }
 

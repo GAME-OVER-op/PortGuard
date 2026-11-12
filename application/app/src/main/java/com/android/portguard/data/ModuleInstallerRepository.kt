@@ -4,6 +4,7 @@ import android.content.Context
 import com.android.portguard.core.PortGuardPaths
 import com.android.portguard.core.RootShell
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
@@ -109,7 +110,7 @@ class ModuleInstallerRepository(
         }
     }
 
-    suspend fun exportModuleZipToSdcard(): ModuleInstallResult {
+    suspend fun exportModuleZipToInternalStorage(): ModuleInstallResult {
         if (!hasEmbeddedModuleAsset()) {
             return ModuleInstallResult(
                 success = false,
@@ -120,18 +121,33 @@ class ModuleInstallerRepository(
             ?: return ModuleInstallResult(false, "Не удалось подготовить ZIP модуля во временном каталоге приложения.")
 
         val dst = PortGuardPaths.EXPORTED_MODULE_ZIP
+        val part = "$dst.part"
         val script = buildString {
-            append("mkdir -p ")
-            append(rootShell.shellQuote(File(dst).parent ?: "/sdcard/Download"))
+            // The fallback path is intentionally fixed. Do not use SAF, Downloads,
+            // or any alternate export directory: the user expects the module ZIP
+            // directly in /storage/emulated/0/.
+            append("rm -f ")
+            append(rootShell.shellQuote(part))
             append(" && cp ")
             append(rootShell.shellQuote(staged.absolutePath))
             append(' ')
-            append(rootShell.shellQuote(dst))
-            append(" && chmod 0644 ")
+            append(rootShell.shellQuote(part))
+            append(" && mv -f ")
+            append(rootShell.shellQuote(part))
+            append(' ')
             append(rootShell.shellQuote(dst))
         }
-        val result = rootShell.exec(script)
-        val out = result.combinedOutput.ifBlank { "ZIP экспортирован в $dst" }
+        val result = try {
+            rootShell.exec(script)
+        } finally {
+            withContext(NonCancellable) {
+                rootShell.exec("rm -f ${rootShell.shellQuote(part)}")
+            }
+            withContext(NonCancellable + Dispatchers.IO) {
+                runCatching { staged.delete() }
+            }
+        }
+        val out = result.combinedOutput.ifBlank { "ZIP сохранён в $dst" }
         return ModuleInstallResult(
             success = result.isSuccess,
             log = out,
@@ -152,7 +168,15 @@ class ModuleInstallerRepository(
         if (!stageLog.first) {
             return ModuleInstallResult(success = false, log = stageLog.second)
         }
-        val installResult = rootShell.exec(rawCommand)
+        val installResult = try {
+            rootShell.exec(rawCommand)
+        } finally {
+            // The module archive can be large and contains an executable. Do
+            // not leave it in /data/local/tmp after success, failure, or caller cancellation.
+            withContext(NonCancellable) {
+                rootShell.exec("rm -f ${rootShell.shellQuote(PortGuardPaths.TMP_MODULE_ZIP)}")
+            }
+        }
         val combined = listOf(stageLog.second, installResult.combinedOutput)
             .filter { it.isNotBlank() }
             .joinToString("\n")
@@ -168,18 +192,39 @@ class ModuleInstallerRepository(
         val cacheFile = stageAssetToCache()
             ?: return false to "Не удалось извлечь ZIP модуля из assets."
         val command = "cp ${rootShell.shellQuote(cacheFile.absolutePath)} ${rootShell.shellQuote(PortGuardPaths.TMP_MODULE_ZIP)}"
-        val result = rootShell.exec(command)
+        val result = try {
+            rootShell.exec(command)
+        } finally {
+            withContext(NonCancellable + Dispatchers.IO) {
+                runCatching { cacheFile.delete() }
+            }
+        }
+        if (!result.isSuccess) {
+            // cp may leave a truncated destination behind. Do not retain a large
+            // or invalid module archive in /data/local/tmp after a staging error.
+            withContext(NonCancellable) {
+                rootShell.exec("rm -f ${rootShell.shellQuote(PortGuardPaths.TMP_MODULE_ZIP)}")
+            }
+        }
         return result.isSuccess to result.combinedOutput.ifBlank { "ZIP подготовлен в ${PortGuardPaths.TMP_MODULE_ZIP}" }
     }
 
     private suspend fun stageAssetToCache(): File? = withContext(Dispatchers.IO) {
-        runCatching {
-            val outFile = File(context.cacheDir, EMBEDDED_ASSET_NAME)
+        var outFile: File? = null
+        try {
+            // A unique cache file avoids an install/export race between two UI
+            // actions using the same fixed module.zip staging path.
+            val tempFile = File.createTempFile("portguard-module-", ".zip", context.cacheDir)
+            outFile = tempFile
             context.assets.open(EMBEDDED_ASSET_NAME).use { input ->
-                FileOutputStream(outFile).use { output -> input.copyTo(output) }
+                FileOutputStream(tempFile).use { output -> input.copyTo(output) }
             }
-            outFile
-        }.getOrNull()
+            tempFile
+        } catch (t: Throwable) {
+            runCatching { outFile?.delete() }
+            if (t is kotlinx.coroutines.CancellationException) throw t
+            null
+        }
     }
 
     private fun parseModuleProp(raw: String): BundledModuleInfo {

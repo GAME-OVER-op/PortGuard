@@ -6,7 +6,9 @@ pub const AID_APP_START: u32 = 10_000;
 pub const AID_APP_END: u32 = 19_999;
 pub const AID_SDK_SANDBOX_START: u32 = 20_000;
 pub const AID_SDK_SANDBOX_END: u32 = 29_999;
-pub const AID_ISOLATED_START: u32 = 99_000;
+// Includes app-zygote isolated UIDs (90000..98999) and regular isolated UIDs
+// (99000..99999) within every Android user namespace.
+pub const AID_ISOLATED_START: u32 = 90_000;
 pub const AID_ISOLATED_END: u32 = 99_999;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -172,18 +174,55 @@ pub struct LocalAddressSnapshot {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct PackageIndex {
-    pub package_to_uid: BTreeMap<String, u32>,
+    /// A package may exist for multiple Android users/profiles and therefore have
+    /// multiple concrete Linux UIDs at the same time.
+    pub package_to_uids: BTreeMap<String, Vec<u32>>,
     pub uid_to_packages: BTreeMap<u32, Vec<String>>,
+    #[serde(default)]
+    pub third_party_uids: BTreeSet<u32>,
+    #[serde(default)]
+    pub transient_app_uids: BTreeSet<u32>,
 }
 
 impl PackageIndex {
     pub fn insert(&mut self, package: String, uid: u32) {
-        self.package_to_uid.insert(package.clone(), uid);
-        let entry = self.uid_to_packages.entry(uid).or_default();
-        if !entry.iter().any(|v| v == &package) {
-            entry.push(package);
-            entry.sort();
+        let package_entry = self.package_to_uids.entry(package.clone()).or_default();
+        if !package_entry.iter().any(|v| *v == uid) {
+            package_entry.push(uid);
+            package_entry.sort();
         }
+
+        let uid_entry = self.uid_to_packages.entry(uid).or_default();
+        if !uid_entry.iter().any(|v| v == &package) {
+            uid_entry.push(package);
+            uid_entry.sort();
+        }
+    }
+
+    pub fn mark_third_party_uid(&mut self, uid: u32) {
+        if Self::is_regular_app_uid(uid) {
+            self.third_party_uids.insert(uid);
+        }
+    }
+
+    pub fn set_transient_app_uids(&mut self, uids: BTreeSet<u32>) -> bool {
+        let normalized = uids
+            .into_iter()
+            .filter(|uid| Self::is_sdk_sandbox_uid(*uid) || Self::is_isolated_uid(*uid))
+            .collect::<BTreeSet<_>>();
+        if self.transient_app_uids == normalized {
+            return false;
+        }
+        self.transient_app_uids = normalized;
+        true
+    }
+
+    pub fn package_count(&self) -> usize {
+        self.package_to_uids.len()
+    }
+
+    pub fn uid_user_id(uid: u32) -> u32 {
+        uid / AID_USER_OFFSET
     }
 
     pub fn uid_app_id(uid: u32) -> u32 {
@@ -206,33 +245,23 @@ impl PackageIndex {
     }
 
     pub fn app_uids(&self) -> BTreeSet<u32> {
-        self.uid_to_packages
-            .keys()
-            .copied()
-            .filter(|uid| Self::is_regular_app_uid(*uid))
-            .collect()
+        let mut out = if self.third_party_uids.is_empty() {
+            self.uid_to_packages
+                .keys()
+                .copied()
+                .filter(|uid| Self::is_regular_app_uid(*uid))
+                .collect::<BTreeSet<_>>()
+        } else {
+            self.third_party_uids.clone()
+        };
+        out.extend(self.transient_app_uids.iter().copied());
+        out
     }
 
     pub fn all_known_uids(&self) -> BTreeSet<u32> {
-        self.uid_to_packages.keys().copied().collect()
-    }
-
-    pub fn retain_only_packages(&mut self, allowed_packages: &BTreeSet<String>) {
-        self.package_to_uid
-            .retain(|pkg, _| allowed_packages.contains(pkg));
-        self.rebuild_uid_to_packages();
-    }
-
-    pub fn rebuild_uid_to_packages(&mut self) {
-        let mut rebuilt: BTreeMap<u32, Vec<String>> = BTreeMap::new();
-        for (package, uid) in &self.package_to_uid {
-            let entry = rebuilt.entry(*uid).or_default();
-            if !entry.iter().any(|v| v == package) {
-                entry.push(package.clone());
-                entry.sort();
-            }
-        }
-        self.uid_to_packages = rebuilt;
+        let mut out = self.uid_to_packages.keys().copied().collect::<BTreeSet<_>>();
+        out.extend(self.transient_app_uids.iter().copied());
+        out
     }
 
     pub fn is_known_regular_app_uid(&self, uid: u32) -> bool {
@@ -245,8 +274,8 @@ impl PackageIndex {
     {
         let mut out = BTreeSet::new();
         for package in packages {
-            if let Some(uid) = self.package_to_uid.get(package) {
-                out.insert(*uid);
+            if let Some(uids) = self.package_to_uids.get(package) {
+                out.extend(uids.iter().copied());
             }
         }
         out

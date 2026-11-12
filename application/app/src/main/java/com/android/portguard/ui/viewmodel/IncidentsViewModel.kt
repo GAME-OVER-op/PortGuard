@@ -43,12 +43,14 @@ class IncidentsViewModel(app: Application) : AndroidViewModel(app) {
                 return@launch
             }
 
-            val runtime = stateRepository.readRuntimeStatus()
-            val incidents = stateRepository.readIncidents()
+            val config = settingsRepository.readConfig()
+            val stateDir = config?.stateDir ?: com.android.portguard.core.PortGuardPaths.STATE_DIR
+            val runtime = stateRepository.readRuntimeStatus(stateDir = stateDir)
+            val incidents = stateRepository.readIncidents(stateDir = stateDir)
             _uiState.value = IncidentsUiState(
                 loading = false,
                 rootGranted = true,
-                stateDirectoryFound = rootShell.fileExists(com.android.portguard.core.PortGuardPaths.STATE_DIR),
+                stateDirectoryFound = rootShell.fileExists(stateDir),
                 incidentsFileFound = runtime.incidentsFileFound,
                 incidents = incidents,
                 statusText = when {
@@ -65,7 +67,9 @@ class IncidentsViewModel(app: Application) : AndroidViewModel(app) {
         if (state.clearing || !state.rootGranted) return
         _uiState.value = state.copy(clearing = true, infoMessage = null, errorMessage = null)
         viewModelScope.launch(Dispatchers.IO) {
-            val ok = stateRepository.clearIncidents()
+            val stateDir = settingsRepository.readConfig()?.stateDir
+                ?: com.android.portguard.core.PortGuardPaths.STATE_DIR
+            val ok = stateRepository.clearIncidents(stateDir = stateDir)
             if (ok) {
                 refreshWithMessage(str(R.string.incidents_clear_success))
             } else {
@@ -79,12 +83,14 @@ class IncidentsViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun refreshWithMessage(message: String) {
         viewModelScope.launch(Dispatchers.IO) {
-            val runtime = stateRepository.readRuntimeStatus()
-            val incidents = stateRepository.readIncidents()
+            val config = settingsRepository.readConfig()
+            val stateDir = config?.stateDir ?: com.android.portguard.core.PortGuardPaths.STATE_DIR
+            val runtime = stateRepository.readRuntimeStatus(stateDir = stateDir)
+            val incidents = stateRepository.readIncidents(stateDir = stateDir)
             _uiState.value = IncidentsUiState(
                 loading = false,
                 rootGranted = true,
-                stateDirectoryFound = rootShell.fileExists(com.android.portguard.core.PortGuardPaths.STATE_DIR),
+                stateDirectoryFound = rootShell.fileExists(stateDir),
                 incidentsFileFound = runtime.incidentsFileFound,
                 incidents = incidents,
                 statusText = if (incidents.isEmpty()) str(R.string.incidents_status_empty) else str(R.string.incidents_status_loaded, incidents.size),

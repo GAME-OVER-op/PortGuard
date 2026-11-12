@@ -12,6 +12,7 @@ import com.android.portguard.core.RootShell
 import com.android.portguard.data.ModuleInstallerRepository
 import com.android.portguard.data.ModuleStatusRepository
 import com.android.portguard.data.SettingsFileRepository
+import com.android.portguard.data.parseConfig
 import com.android.portguard.ui.state.DiagnosticsUiState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -69,11 +70,23 @@ class DiagnosticsViewModel(app: Application) : AndroidViewModel(app) {
             }
 
             val installer = moduleInstallerRepository.detectInstaller()
-            val stateDirFound = rootShell.fileExists(PortGuardPaths.STATE_DIR)
             val configRaw = rootShell.readText(PortGuardPaths.CONFIG_JSON).orEmpty().trim()
-            val statusRaw = rootShell.readText(PortGuardPaths.STATUS_JSON).orEmpty().trim()
-            val summaryRaw = rootShell.readText(PortGuardPaths.SUMMARY_JSON).orEmpty().trim()
-            val incidentsRaw = rootShell.readText(PortGuardPaths.INCIDENTS_JSONL).orEmpty().trim()
+            val stateDir = if (configRaw.isBlank()) {
+                PortGuardPaths.STATE_DIR
+            } else {
+                runCatching { parseConfig(configRaw).stateDir }.getOrDefault(PortGuardPaths.STATE_DIR)
+            }
+            val normalizedStateDir = stateDir.trim().trimEnd('/').ifBlank { PortGuardPaths.STATE_DIR }
+            val stateDirFound = rootShell.fileExists(normalizedStateDir)
+            val statusPath = "$normalizedStateDir/status.json"
+            val summaryPath = "$normalizedStateDir/summary.json"
+            val incidentsPath = "$normalizedStateDir/incidents.jsonl"
+            val statusFileFound = rootShell.fileExists(statusPath)
+            val summaryFileFound = rootShell.fileExists(summaryPath)
+            val incidentsFileFound = rootShell.fileExists(incidentsPath)
+            val statusRaw = rootShell.readText(statusPath).orEmpty().trim()
+            val summaryRaw = rootShell.readText(summaryPath).orEmpty().trim()
+            val incidentsRaw = rootShell.readTextTail(incidentsPath, 20).orEmpty().trim()
             val modulePropRaw = rootShell.readText(PortGuardPaths.MODULE_PROP).orEmpty()
             val moduleVersionName = parsePropValue(modulePropRaw, "version")
             val moduleVersionCode = parsePropValue(modulePropRaw, "versionCode")
@@ -84,10 +97,11 @@ class DiagnosticsViewModel(app: Application) : AndroidViewModel(app) {
                 moduleInstalled = env.moduleDirectoryExists,
                 settingsFound = env.settingsDirectoryExists,
                 stateDirFound = stateDirFound,
+                statePath = normalizedStateDir,
                 configFound = configRaw.isNotBlank(),
-                statusFileFound = statusRaw.isNotBlank(),
-                summaryFileFound = summaryRaw.isNotBlank(),
-                incidentsFileFound = incidentsRaw.isNotBlank(),
+                statusFileFound = statusFileFound,
+                summaryFileFound = summaryFileFound,
+                incidentsFileFound = incidentsFileFound,
                 configJsonValid = isValidJson(configRaw),
                 statusJsonValid = isValidJson(statusRaw),
                 summaryJsonValid = isValidJson(summaryRaw),
@@ -100,9 +114,9 @@ class DiagnosticsViewModel(app: Application) : AndroidViewModel(app) {
                     settingsFound = env.settingsDirectoryExists,
                     stateDirFound = stateDirFound,
                     configFound = configRaw.isNotBlank(),
-                    statusFound = statusRaw.isNotBlank(),
-                    summaryFound = summaryRaw.isNotBlank(),
-                    incidentsFound = incidentsRaw.isNotBlank(),
+                    statusFound = statusFileFound,
+                    summaryFound = summaryFileFound,
+                    incidentsFound = incidentsFileFound,
                 ),
                 configPreview = configRaw.take(2500),
                 statusPreview = statusRaw.take(2500),

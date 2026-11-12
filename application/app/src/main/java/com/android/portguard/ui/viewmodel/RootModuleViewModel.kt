@@ -87,7 +87,7 @@ class RootModuleViewModel(app: Application) : AndroidViewModel(app) {
         )
 
         viewModelScope.launch(Dispatchers.IO) {
-            val result = installerRepository.exportModuleZipToSdcard()
+            val result = installerRepository.exportModuleZipToInternalStorage()
             _uiState.value = _uiState.value.copy(
                 installing = false,
                 installSuccess = result.success,

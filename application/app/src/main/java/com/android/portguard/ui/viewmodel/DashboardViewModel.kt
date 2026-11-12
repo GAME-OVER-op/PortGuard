@@ -52,8 +52,9 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
             }
 
             val config = settingsRepository.readConfig()
-            val runtime = stateRepository.readRuntimeStatus()
-            val incidents = stateRepository.readIncidents(limit = 1)
+            val stateDir = config?.stateDir ?: com.android.portguard.core.PortGuardPaths.STATE_DIR
+            val runtime = stateRepository.readRuntimeStatus(stateDir = stateDir)
+            val incidents = stateRepository.readIncidents(limit = 1, stateDir = stateDir)
             _uiState.value = buildUiState(
                 environment = environment,
                 config = config,
@@ -137,8 +138,9 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) {
             val environment = moduleStatusRepository.inspect(readConfigPreview = true)
             val config = settingsRepository.readConfig()
-            val runtime = stateRepository.readRuntimeStatus()
-            val incidents = stateRepository.readIncidents(limit = 1)
+            val stateDir = config?.stateDir ?: com.android.portguard.core.PortGuardPaths.STATE_DIR
+            val runtime = stateRepository.readRuntimeStatus(stateDir = stateDir)
+            val incidents = stateRepository.readIncidents(limit = 1, stateDir = stateDir)
             _uiState.value = buildUiState(
                 environment = environment,
                 config = config,
