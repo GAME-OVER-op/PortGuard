@@ -129,7 +129,7 @@ fn render_dashboard(snapshot: &DashboardSnapshot) -> String {
     let label_width = rows.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
     let content_width = rows
         .iter()
-        .map(|(k, v)| label_width + 3 + v.len())
+        .map(|(_, v)| label_width + 3 + v.len())
         .max()
         .unwrap_or(0);
     let title = "PortGuard live status";
@@ -392,42 +392,48 @@ impl PolicyCache {
             && self.listener_keys == keys;
 
         if same_inputs {
-            if let Some(decision) = self.decision.as_mut() {
-                // PID/inode/process-name are diagnostics, not firewall-policy
-                // inputs. Refresh that metadata without rebuilding the expensive
-                // listener x UID rule set.
-                let current_listeners = policy::engine::select_protected_listeners(cfg, listeners);
-                if decision.protected_listeners != current_listeners {
-                    decision.protected_listeners = current_listeners;
-                }
-                return Ok(decision);
-            }
             if let Some(error) = self.last_error.as_ref() {
                 return Err(anyhow::anyhow!(error.clone()));
             }
+        } else {
+            match policy::engine::build(cfg, listeners, packages) {
+                Ok(decision) => {
+                    self.cfg = Some(cfg.clone());
+                    self.package_revision = package_revision;
+                    self.listener_keys = keys;
+                    self.last_error = None;
+                    self.decision = Some(decision);
+                }
+                Err(err) => {
+                    let error = format!("{err:#}");
+                    self.cfg = Some(cfg.clone());
+                    self.package_revision = package_revision;
+                    self.listener_keys = keys;
+                    self.decision = None;
+                    self.last_error = Some(error.clone());
+                    return Err(anyhow::anyhow!(error));
+                }
+            }
         }
 
-        match policy::engine::build(cfg, listeners, packages) {
-            Ok(decision) => {
-                self.cfg = Some(cfg.clone());
-                self.package_revision = package_revision;
-                self.listener_keys = keys;
-                self.last_error = None;
-                self.decision = Some(decision);
-                self.decision
-                    .as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("policy cache unavailable after rebuild"))
-            }
-            Err(err) => {
-                let error = format!("{err:#}");
-                self.cfg = Some(cfg.clone());
-                self.package_revision = package_revision;
-                self.listener_keys = keys;
-                self.decision = None;
-                self.last_error = Some(error.clone());
-                Err(anyhow::anyhow!(error))
+        // All mutations are complete before a reference with lifetime 'a is
+        // returned. Keep the diagnostic refresh borrow scoped to this block so
+        // it cannot overlap the final `&'a` borrow of self.decision.
+        if same_inputs {
+            // PID/inode/process-name are diagnostics, not firewall-policy
+            // inputs. Refresh that metadata without rebuilding the expensive
+            // listener x UID rule set.
+            let current_listeners = policy::engine::select_protected_listeners(cfg, listeners);
+            if let Some(decision) = self.decision.as_mut() {
+                if decision.protected_listeners != current_listeners {
+                    decision.protected_listeners = current_listeners;
+                }
             }
         }
+
+        self.decision
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("policy cache unavailable after rebuild"))
     }
 
     fn invalidate(&mut self) {
@@ -1129,7 +1135,6 @@ fn tick_active(
             "degraded: firewall apply incomplete"
         };
         publish_public_state(cfg, runtime_state, false, public_message, now)?;
-        runtime_dirty = false;
 
         // Do not immediately run another set of iptables counter commands after a
         // potentially expensive apply/self-test pass.

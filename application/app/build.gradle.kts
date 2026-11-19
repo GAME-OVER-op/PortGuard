@@ -25,6 +25,14 @@ val moduleProps = Properties().apply {
 val moduleVersionCode = (moduleProps.getProperty("versionCode") ?: "1").toIntOrNull() ?: 1
 val moduleVersionName = moduleProps.getProperty("version") ?: "0.0.0"
 
+// Termux/ARM64 hosts ship a native aapt2 binary, because the Maven aapt2 is
+// x86_64-only. Use that override only when it actually exists; on normal
+// Linux/macOS/Windows hosts AGP must use its Maven-provided aapt2 instead.
+val termuxAapt2 = file("/data/data/com.termux/files/usr/bin/aapt2")
+if (termuxAapt2.isFile) {
+    extra["android.aapt2FromMavenOverride"] = termuxAapt2.absolutePath
+}
+
 android {
     namespace = "com.android.portguard"
     compileSdk = 34
